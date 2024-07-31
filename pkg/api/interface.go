@@ -4,6 +4,8 @@
 
 package api
 
+import "context"
+
 type Runner interface {
-	Run() error
+	Run(ctx context.Context) error
 }

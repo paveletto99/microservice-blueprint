@@ -5,7 +5,10 @@
 package main
 
 import (
+	"context"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/paveletto99/go-pobo"
@@ -21,6 +24,20 @@ type AppOptions struct {
 }
 
 func main() {
+	// setup logger
+	var log = logrus.New()
+	log.SetFormatter(&logrus.JSONFormatter{})
+	log.SetOutput(os.Stdout)
+	// setup context
+	ctx, done := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+
+	defer func() {
+		done()
+		if r := recover(); r != nil {
+			log.Fatal("application panic", "panic", r)
+		}
+	}()
+
 	/* Change version to -V */
 	cli.VersionFlag = &cli.BoolFlag{
 		Name:    "version",
@@ -32,7 +49,7 @@ func main() {
 		Version:  pobo.Version,
 		Compiled: time.Now(),
 		Authors: []*cli.Author{
-			&cli.Author{
+			{
 				Name:  pobo.AuthorName,
 				Email: pobo.AuthorEmail,
 			},
@@ -43,7 +60,7 @@ func main() {
 		UsageText: `service <options> <flags>
 A longer sentence, about how exactly to use this program`,
 		Commands: []*cli.Command{
-			&cli.Command{},
+			{},
 		},
 		Flags: []cli.Flag{
 			&cli.BoolFlag{
@@ -56,12 +73,14 @@ A longer sentence, about how exactly to use this program`,
 		HideHelp:             false,
 		HideVersion:          false,
 		Action: func(c *cli.Context) error {
-
-			//
-			poboObject := service.NewPobo()
-			return poboObject.Run()
-			//
-
+			poboObject, _ := service.NewServer(log, &service.Config{Port: "6660"})
+			err := poboObject.Run(ctx)
+			done()
+			if err != nil {
+				log.Fatal(err)
+			}
+			log.Info("successful shutdown 🌂")
+			return err
 		},
 	}
 

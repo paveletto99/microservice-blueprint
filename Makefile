@@ -77,3 +77,8 @@ ko-del:
 .PHONY: local-repo
 local-repo:
 	docker run -d --net=kind --restart=always -p "$(local_docker_repo):5000" --name "kind-registry" registry:2
+
+.PHONY: update-deps
+update-deps:
+	go get -u
+	go mod tidy
