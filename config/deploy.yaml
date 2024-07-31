@@ -1,0 +1,19 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: ko-app
+  name: ko-app-deploy
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ko-app
+  template:
+    metadata:
+      labels:
+        app: ko-app
+    spec:
+      containers:
+        - image: ko://cmd/main.go
+          name: ko
