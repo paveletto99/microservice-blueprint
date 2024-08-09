@@ -10,3 +10,8 @@ Use this as a starting point for Go programs, CLI tools, Services, Daemons, Libr
 ## TODO
 
 - add assert utils
+- migrate to logrus
+- add otel
+- add prom metrics
+- nats
+- scylla

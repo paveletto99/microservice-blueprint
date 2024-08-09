@@ -3,21 +3,18 @@ package service
 import (
 	"encoding/json"
 	"net/http"
-
-	"github.com/sirupsen/logrus"
 )
 
 type Healthz struct {
 	Status string `json:"status"`
 }
 
-func HandleHealthz(log *logrus.Logger) http.Handler {
-	return http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
-		writer.Header().Set("Content-Type", "application/json")
-		writer.WriteHeader(http.StatusOK)
-		if err := json.NewEncoder(writer).Encode(Healthz{Status: "ok"}); err != nil {
-			log.Error("failed to serve healthcheck")
-			writer.WriteHeader(http.StatusInternalServerError)
+func HandleHealthz() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		if err := json.NewEncoder(w).Encode(Healthz{Status: "ok"}); err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
 		}
 	})
 }

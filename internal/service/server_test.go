@@ -39,7 +39,7 @@ func TestQuicClient(t *testing.T) {
 		Transport: roundTripper,
 	}
 
-	r, e := client.Get("https://127.0.0.1:6660/")
+	r, e := client.Get("https://127.0.0.1:44591/")
 	if e != nil {
 		t.Error("FAIL")
 	}

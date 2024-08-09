@@ -6,85 +6,44 @@ package service
 
 import (
 	"context"
-	"fmt"
-	"net"
 	"net/http"
-	"os"
-	"os/signal"
-	"sync"
-	"time"
 
-	"github.com/paveletto99/go-pobo/pkg/api"
-	"github.com/quic-go/quic-go/http3"
-	"github.com/sirupsen/logrus"
+	"github.com/paveletto99/go-pobo/internal/serverenv"
 )
 
-// Compile check *Pobo implements Runner interface
-var _ api.Runner = &Server{}
+// Server is the admin server.
+type Server struct {
+	config *Config
+	env    *serverenv.ServerEnv
+}
+
+// NewServer makes a new admin console server.
+func NewServer(config *Config, env *serverenv.ServerEnv) (*Server, error) {
+	// if env.Database() == nil {
+	// 	return nil, fmt.Errorf("missing Database in server env")
+	// }
+
+	return &Server{
+		config: config,
+		env:    env,
+	}, nil
+}
 
 type Handler = http.Handler
-
-type Server struct {
-	log    *logrus.Logger
-	config *Config
-	// env *serverenv.ServerEnv
-}
-
-func NewServer(logger *logrus.Logger, config *Config) (*Server, error) {
-	return &Server{log: logger, config: config}, nil
-}
 
 func someMiddleware(handler http.Handler) http.Handler {
 	return handler
 }
 
-func addRoutes(mux *http.ServeMux, logger *logrus.Logger) *http.ServeMux {
-	logger.Info("unimplemented")
+func addRoutes(mux *http.ServeMux) *http.ServeMux {
 	mux.Handle("/", http.NotFoundHandler())
-	mux.Handle("/healthz", HandleHealthz(logger))
+	mux.Handle("/healthz", HandleHealthz())
 	return mux
 }
 
-func (s *Server) Run(ctx context.Context) error {
-	client := api.Client{}
-	server := api.Server{}
-
+func (s *Server) Run(ctx context.Context) http.Handler {
 	mux := http.NewServeMux()
-	addRoutes(mux, s.log)
+	addRoutes(mux)
 	someMiddleware(mux)
-
-	ctx, cancel := signal.NotifyContext(ctx, os.Interrupt)
-	defer cancel()
-
-	s.log.Infof("Client: %x", client)
-	s.log.Infof("Server: %x", server)
-
-	httpServer := &http3.Server{
-		Addr:    net.JoinHostPort("127.0.0.1", s.config.Port),
-		Handler: mux,
-	}
-
-	go func() {
-		s.log.Printf("listening on %s\n", httpServer.Addr)
-		if err := httpServer.ListenAndServeTLS("./tools/certs/certificate.pem", "./tools/certs/certificate.key"); err != nil && err != http.ErrServerClosed {
-			fmt.Fprintf(os.Stderr, "error listening and serving: %s\n", err)
-		}
-	}()
-
-	var wg sync.WaitGroup
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		<-ctx.Done() // make a new context for the Shutdown
-		// shutdownCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		// defer cancel()
-		if err := httpServer.CloseGracefully(10 * time.Second); err != nil {
-			fmt.Fprintf(os.Stderr, "error shutting down http server: %s\n", err)
-		}
-	}()
-
-	wg.Wait()
-
-	return nil
+	return mux
 }
