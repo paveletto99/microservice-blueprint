@@ -65,6 +65,7 @@ func TestMetrics(t *testing.T) {
 
 	fmt.Printf("client: got response!\n")
 	fmt.Printf("client: status code: %d\n", res.StatusCode)
+	fmt.Println(res.Body)
 
 }
 
