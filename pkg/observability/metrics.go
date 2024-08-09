@@ -33,7 +33,7 @@ func ServeMetricsIfPrometheus(ctx context.Context) (MetricsDoneFunc, error) {
 		exporter := promhttp.Handler()
 
 		r := *http.NewServeMux()
-		r.Handle("GET /metrics", exporter)
+		r.Handle("/metrics", exporter)
 
 		srv := &http.Server{
 			Addr:              ":" + metricsPort,
