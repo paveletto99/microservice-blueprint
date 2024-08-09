@@ -36,7 +36,7 @@ func someMiddleware(handler http.Handler) http.Handler {
 }
 
 func addRoutes(mux *http.ServeMux) *http.ServeMux {
-	mux.Handle("/", http.NotFoundHandler())
+	// mux.Handle("/", http.NotFoundHandler())
 	mux.Handle("/healthz", HandleHealthz())
 	return mux
 }

@@ -8,6 +8,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -25,24 +26,23 @@ import (
 // }
 
 func TestQuicClient(t *testing.T) {
-
 	// TODO mock running server
-
 	roundTripper := &http3.RoundTripper{
 		TLSClientConfig: &tls.Config{
 			RootCAs:            GetRootCA(),
 			InsecureSkipVerify: true,
-		}, // set a TLS client config, if desired
+		}, // set a TLS client config, if desdired
 	}
 	defer roundTripper.Close()
 	client := &http.Client{
 		Transport: roundTripper,
 	}
 
-	r, e := client.Get("https://127.0.0.1:44591/")
+	r, e := client.Get("https://0.0.0.0:42333/healthz")
 	if e != nil {
 		t.Error("FAIL")
 	}
+	t.Log(r.StatusCode)
 
 	for k, v := range r.Header {
 		t.Log(k, v)
@@ -53,6 +53,19 @@ func TestQuicClient(t *testing.T) {
 	response := string(resBody)
 
 	t.Log(response)
+}
+
+func TestMetrics(t *testing.T) {
+	requestURL := fmt.Sprintf("http://0.0.0.0:%d/metrics", 2223)
+	res, err := http.Get(requestURL)
+	if err != nil {
+		fmt.Printf("error making http request: %s\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("client: got response!\n")
+	fmt.Printf("client: status code: %d\n", res.StatusCode)
+
 }
 
 // GetRootCA returns an x509.CertPool containing the CA certificate

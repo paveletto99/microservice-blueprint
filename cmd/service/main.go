@@ -10,6 +10,7 @@ import (
 	"github.com/paveletto99/go-pobo/internal/service"
 	"github.com/paveletto99/go-pobo/pkg/logging"
 	"github.com/paveletto99/go-pobo/pkg/server"
+	// "github.com/paveletto99/go-pobo/utils"
 )
 
 func main() {

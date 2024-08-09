@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/paveletto99/go-pobo/pkg/logging"
+	"github.com/paveletto99/go-pobo/pkg/observability"
 	"github.com/quic-go/quic-go/http3"
 	"google.golang.org/grpc"
 )
@@ -66,11 +67,18 @@ func (s *Server) ServeHTTP3(ctx context.Context, srv *http3.Server) error {
 	ctx, cancel := signal.NotifyContext(ctx, os.Interrupt)
 	defer cancel()
 
+	// Create the prometheus metrics proxy.
+	metricsDone, err := observability.ServeMetricsIfPrometheus(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to serve metrics: %w", err)
+	}
+
 	go func() {
 		logger.Infof("listening on %s\n", srv.Addr)
 		if err := srv.ListenAndServeTLS("./tools/certs/certificate.pem", "./tools/certs/certificate.key"); err != nil && err != http.ErrServerClosed {
 			fmt.Fprintf(os.Stderr, "error listening and serving: %s\n", err)
 		}
+
 	}()
 
 	var wg sync.WaitGroup
@@ -85,6 +93,13 @@ func (s *Server) ServeHTTP3(ctx context.Context, srv *http3.Server) error {
 	}()
 
 	wg.Wait()
+
+	// Shutdown the prometheus metrics proxy.
+	if metricsDone != nil {
+		if err := metricsDone(); err != nil {
+			logger.Errorf("failed to close metrics exporter: %w", err)
+		}
+	}
 
 	return nil
 }

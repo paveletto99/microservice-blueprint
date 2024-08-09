@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/paveletto99/go-pobo"
-	"github.com/paveletto99/go-pobo/internal/service"
+	// "github.com/paveletto99/go-pobo/internal/service"
 	"github.com/sirupsen/logrus"
 	"github.com/urfave/cli/v2"
 )
@@ -29,7 +29,7 @@ func main() {
 	log.SetFormatter(&logrus.JSONFormatter{})
 	log.SetOutput(os.Stdout)
 	// setup context
-	ctx, done := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	_, done := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 
 	defer func() {
 		done()
@@ -73,14 +73,14 @@ A longer sentence, about how exactly to use this program`,
 		HideHelp:             false,
 		HideVersion:          false,
 		Action: func(c *cli.Context) error {
-			poboObject, _ := service.NewServer(log, &service.Config{Port: "6660"})
-			err := poboObject.Run(ctx)
+			// poboObject, _ := service.NewServer(log, &service.Config{Port: "6660"})
+			// err := poboObject.Run(ctx)
 			done()
-			if err != nil {
-				log.Fatal(err)
-			}
-			log.Info("successful shutdown 🌂")
-			return err
+			// if err != nil {
+			// 	log.Fatal(err)
+			// }
+			// log.Info("successful shutdown 🌂")
+			return nil
 		},
 	}
 
