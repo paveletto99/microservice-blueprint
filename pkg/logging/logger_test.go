@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
-	"go.uber.org/zap/zapcore"
+	"log/slog"
 )
 
 func TestNewLogger(t *testing.T) {
@@ -53,21 +53,23 @@ func TestContext(t *testing.T) {
 	}
 }
 
-func TestLevelToZapLevls(t *testing.T) {
+func TestLevelToSlogLevls(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
 		input string
-		want  zapcore.Level
+		want  slog.Level
 	}{
-		{input: levelDebug, want: zapcore.DebugLevel},
-		{input: levelInfo, want: zapcore.InfoLevel},
-		{input: levelWarning, want: zapcore.WarnLevel},
-		{input: levelError, want: zapcore.ErrorLevel},
-		{input: levelCritical, want: zapcore.DPanicLevel},
-		{input: levelAlert, want: zapcore.PanicLevel},
-		{input: levelEmergency, want: zapcore.FatalLevel},
-		{input: "unknown", want: zapcore.WarnLevel},
+		{input: levelDebug, want: slog.LevelDebug},
+		{input: levelInfo, want: slog.LevelInfo},
+		{input: levelWarning, want: slog.LevelWarn},
+		{input: levelError, want: slog.LevelError},
+		{input: levelCritical, want: LevelCritical},
+		{input: levelAlert, want: LevelAlert},
+		{input: levelEmergency, want: LevelEmergency},
+		{input: levelFatal, want: LevelFatal},
+		{input: levelNotice, want: LevelNotice},
+		{input: "unknown", want: slog.LevelWarn},
 	}
 
 	for _, tc := range cases {
@@ -76,7 +78,7 @@ func TestLevelToZapLevls(t *testing.T) {
 		t.Run(tc.input, func(t *testing.T) {
 			t.Parallel()
 
-			got := levelToZapLevel(tc.input)
+			got := levelToSlogLevel(tc.input)
 			if diff := cmp.Diff(tc.want, got); diff != "" {
 				t.Fatalf("mismatch (-want, +got):\n%s", diff)
 			}
