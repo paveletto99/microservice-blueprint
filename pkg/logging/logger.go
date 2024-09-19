@@ -26,7 +26,7 @@ var (
 
 // custom levels
 const (
-	LevelEmergency = slog.Level(0)
+	LevelEmergency = slog.Level(-1)
 	LevelAlert     = slog.Level(1)
 	LevelCritical  = slog.Level(2)
 	LevelPanic     = slog.Level(4)
