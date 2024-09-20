@@ -1,0 +1,16 @@
+syntax = "proto3";
+
+option go_package="github.com/paveletto99/microservice-blueprint/pkg/api/payment/v1";
+
+message CreatePaymentRequest {
+  float price =1;
+}
+
+message CreatePaymentResponse{
+  int64 bill_id =1;
+}
+
+service Payment {
+  rpc Create(CreatePaymentRequest)
+    returns (CreatePaymentResponse) {}
+}

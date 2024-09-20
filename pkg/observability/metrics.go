@@ -44,15 +44,15 @@ func ServeMetricsIfPrometheus(ctx context.Context) (MetricsDoneFunc, error) {
 		// Start the server in the background.
 		go func() {
 			if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-				logger.Errorw("failed to serve prometheus metrics", "error", err)
+				logger.Error("failed to serve prometheus metrics", "error", err)
 				return
 			}
 		}()
-		logger.Debugw("prometheus exporter is running", "port", metricsPort)
+		logger.Debug("prometheus exporter is running", "port", metricsPort)
 
 		// Create the shutdown closer.
 		metricsDone := func() error {
-			logger.Debugw("shutting down prometheus metrics exporter")
+			logger.Debug("shutting down prometheus metrics exporter")
 
 			shutdownCtx, done := context.WithTimeout(context.Background(), 10*time.Second)
 			defer done()
@@ -60,7 +60,7 @@ func ServeMetricsIfPrometheus(ctx context.Context) (MetricsDoneFunc, error) {
 			if err := srv.Shutdown(shutdownCtx); err != nil {
 				return fmt.Errorf("failed to shutdown prometheus metrics exporter: %w", err)
 			}
-			logger.Debugw("finished shutting down prometheus metrics exporter")
+			logger.Debug("finished shutting down prometheus metrics exporter")
 
 			return nil
 		}

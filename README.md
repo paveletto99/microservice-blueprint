@@ -9,7 +9,7 @@ Use this as a starting point for Go programs, CLI tools, Services, Daemons, Libr
 
 ## TODO
 
-- migrate to logrus
+- grpc
 - add otel
 - add prom metrics
 - nats

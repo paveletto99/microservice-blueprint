@@ -74,7 +74,7 @@ func (s *Server) ServeHTTP3(ctx context.Context, srv *http3.Server) error {
 	}
 
 	go func() {
-		logger.Infof("listening on %s\n", srv.Addr)
+		logger.Info("listening on %s\n", srv.Addr)
 		if err := srv.ListenAndServeTLS("./tools/certs/certificate.pem", "./tools/certs/certificate.key"); err != nil && err != http.ErrServerClosed {
 			fmt.Fprintf(os.Stderr, "error listening and serving: %s\n", err)
 		}
@@ -97,7 +97,7 @@ func (s *Server) ServeHTTP3(ctx context.Context, srv *http3.Server) error {
 	// Shutdown the prometheus metrics proxy.
 	if metricsDone != nil {
 		if err := metricsDone(); err != nil {
-			logger.Errorf("failed to close metrics exporter: %w", err)
+			logger.Error("failed to close metrics exporter: %w", err)
 		}
 	}
 
@@ -118,11 +118,11 @@ func (s *Server) ServeHTTP(ctx context.Context, srv *http.Server) error {
 	go func() {
 		<-ctx.Done()
 
-		logger.Debugf("server.Serve: context closed")
+		logger.Debug("server.Serve: context closed")
 		shutdownCtx, done := context.WithTimeout(context.Background(), 5*time.Second)
 		defer done()
 
-		logger.Debugf("server.Serve: shutting down")
+		logger.Debug("server.Serve: shutting down")
 		errCh <- srv.Shutdown(shutdownCtx)
 	}()
 
@@ -188,8 +188,8 @@ func (s *Server) ServeGRPC(ctx context.Context, srv *grpc.Server) error {
 	go func() {
 		<-ctx.Done()
 
-		logger.Debugf("server.Serve: context closed")
-		logger.Debugf("server.Serve: shutting down")
+		logger.Debug("server.Serve: context closed")
+		logger.Debug("server.Serve: shutting down")
 		srv.GracefulStop()
 	}()
 
@@ -198,7 +198,7 @@ func (s *Server) ServeGRPC(ctx context.Context, srv *grpc.Server) error {
 		return fmt.Errorf("failed to serve: %w", err)
 	}
 
-	logger.Debugf("server.Serve: serving stopped")
+	logger.Debug("server.Serve: serving stopped")
 
 	// Return any errors that happened during shutdown.
 	select {
