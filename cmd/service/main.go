@@ -10,7 +10,6 @@ import (
 	"github.com/paveletto99/microservice-blueprint/internal/service"
 	"github.com/paveletto99/microservice-blueprint/pkg/logging"
 	"github.com/paveletto99/microservice-blueprint/pkg/server"
-	// "github.com/paveletto99/microservice-blueprint/utils"
 )
 
 func main() {
@@ -22,14 +21,14 @@ func main() {
 	defer func() {
 		done()
 		if r := recover(); r != nil {
-			logger.Fatalw("😱 application panic", "panic", r)
+			logger.Error("😱 application panic", "panic", r)
 		}
 	}()
 	err := realMain(ctx)
 	done()
 
 	if err != nil {
-		logger.Fatal(err)
+		logger.Log(ctx, logging.LevelFatal, err.Error())
 	}
 	logger.Info("successful shutdown")
 }
@@ -54,7 +53,7 @@ func realMain(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("server.New: %w", err)
 	}
-	logger.Infof("listening on :%s", config.Port)
+	logger.Info(fmt.Sprintf("listening on :%s", config.Port))
 
 	return srv.ServeHTTPHandler(ctx, serviceServer.Run(ctx))
 }

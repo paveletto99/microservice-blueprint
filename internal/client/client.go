@@ -7,12 +7,12 @@ package service
 import (
 	"context"
 
+	"github.com/paveletto99/microservice-blueprint/internal/serverenv"
+	"github.com/paveletto99/microservice-blueprint/pkg/logging"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
-	"github.com/paveletto99/microservice-blueprint/internal/serverenv"
 	payment "github.com/paveletto99/microservice-blueprint/pkg/api/payment/v1"
-	"github.com/paveletto99/microservice-blueprint/pkg/logging"
 )
 
 // Server is the admin server.
@@ -36,10 +36,10 @@ func NewClient(ctx context.Context, config *Config, env *serverenv.ServerEnv) (*
 
 	defer conn.Close()
 
-	paymentClient := payment.NewPaymentServiceClient(conn)
+	paymentClient := payment.NewPaymentClient(conn)
 	_, err = paymentClient.Create(ctx, &payment.CreatePaymentRequest{Price: 23})
 	if err != nil {
-		// log.Println("Don't worry, we don't expect to see it is working.")
+		logging.Info(ctx, "Don't worry, we don't expect to see it is working.")
 	}
 
 	return &Client{}, nil

@@ -6,11 +6,13 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/paveletto99/microservice-blueprint/internal/serverenv"
+	// "github.com/paveletto99/microservice-blueprint/internal/serverenv"
 	"github.com/paveletto99/microservice-blueprint/internal/service"
 	"github.com/paveletto99/microservice-blueprint/pkg/logging"
 	"github.com/paveletto99/microservice-blueprint/pkg/server"
 	// "github.com/paveletto99/microservice-blueprint/utils"
+	payment "github.com/paveletto99/microservice-blueprint/internal/payment"
+	"google.golang.org/grpc"
 )
 
 func main() {
@@ -22,10 +24,9 @@ func main() {
 	defer func() {
 		done()
 		if r := recover(); r != nil {
-			logger.LogAttrs(
+			logger.Log(
 				context.Background(), logging.LevelPanic,
-				"😱 application panic",
-				// r,
+				fmt.Sprintf("😱 application panic: %s", r),
 			)
 		}
 	}()
@@ -33,7 +34,10 @@ func main() {
 	done()
 
 	if err != nil {
-		// logger.Fatal(err)
+		logger.Log(
+			context.Background(), logging.LevelFatal,
+			fmt.Sprintf("😱 %s", err.Error()),
+		)
 	}
 	logger.Info("successful shutdown")
 }
@@ -48,17 +52,17 @@ func realMain(ctx context.Context) error {
 	// 	return fmt.Errorf("setup.Setup: %w", err)
 	// }
 	// defer env.Close(ctx)
-	env := &serverenv.ServerEnv{}
-	serviceServer, err := service.NewServer(&config, env)
-	if err != nil {
-		return fmt.Errorf("service.NewServer: %w", err)
-	}
+	// env := &serverenv.ServerEnv{}
+
+	var sopts []grpc.ServerOption
+	grpcServer := grpc.NewServer(sopts...)
+	payment.RegisterPaymentServer(grpcServer, payment.UnimplementedPaymentServer{})
 
 	srv, err := server.New(config.Port)
 	if err != nil {
 		return fmt.Errorf("server.New: %w", err)
 	}
-	logger.Info("listening on :%s", config.Port)
+	logger.Info(fmt.Sprintf("listening on :%s", config.Port))
 
-	return srv.ServeGRPC(ctx, serviceServer.RunRpc(ctx))
+	return srv.ServeGRPC(ctx, grpcServer)
 }

@@ -74,7 +74,7 @@ func (s *Server) ServeHTTP3(ctx context.Context, srv *http3.Server) error {
 	}
 
 	go func() {
-		logger.Info("listening on %s\n", srv.Addr)
+		logger.Info(fmt.Sprintf("listening on %s\n", srv.Addr))
 		if err := srv.ListenAndServeTLS("./tools/certs/certificate.pem", "./tools/certs/certificate.key"); err != nil && err != http.ErrServerClosed {
 			fmt.Fprintf(os.Stderr, "error listening and serving: %s\n", err)
 		}
