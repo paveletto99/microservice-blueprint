@@ -6,11 +6,11 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/paveletto99/go-pobo/internal/serverenv"
-	"github.com/paveletto99/go-pobo/internal/service"
-	"github.com/paveletto99/go-pobo/pkg/logging"
-	"github.com/paveletto99/go-pobo/pkg/server"
-	// "github.com/paveletto99/go-pobo/utils"
+	"github.com/paveletto99/microservice-blueprint/internal/serverenv"
+	"github.com/paveletto99/microservice-blueprint/internal/service"
+	"github.com/paveletto99/microservice-blueprint/pkg/logging"
+	"github.com/paveletto99/microservice-blueprint/pkg/server"
+	// "github.com/paveletto99/microservice-blueprint/utils"
 )
 
 func main() {

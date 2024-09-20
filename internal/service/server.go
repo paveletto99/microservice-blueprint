@@ -12,8 +12,8 @@ import (
 
 	"google.golang.org/grpc"
 
-	"github.com/paveletto99/go-pobo/internal/serverenv"
-	payment "github.com/paveletto99/microservice-blueprint/pkg/api/discovery/v1"
+	"github.com/paveletto99/microservice-blueprint/internal/serverenv"
+	payment "github.com/paveletto99/microservice-blueprint/pkg/api/payment/v1"
 )
 
 // Server is the admin server.
@@ -60,7 +60,7 @@ func (s *Server) RunRpc(ctx context.Context) *grpc.Server {
 	}
 	var opts []grpc.ServerOption
 	grpcServer := grpc.NewServer(opts...)
-	payment.RegisterPaymentServiceServer(grpcServer, payment.UnimplementedPaymentServiceServer{})
+	payment.RegisterPaymentServer(grpcServer, payment.UnimplementedPaymentServer{})
 	grpcServer.Serve(listener)
 
 	return grpcServer

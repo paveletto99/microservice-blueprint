@@ -1,4 +1,5 @@
-module github.com/paveletto99/go-pobo
+// module github.com/paveletto99/go-pobo
+module github.com/paveletto99/microservice-blueprint
 
 go 1.22.6
 
@@ -8,6 +9,7 @@ require (
 	github.com/sirupsen/logrus v1.9.3
 	github.com/urfave/cli/v2 v2.25.7
 	google.golang.org/grpc v1.65.0
+	google.golang.org/protobuf v1.34.2
 )
 
 require (
@@ -24,7 +26,6 @@ require (
 	go.opentelemetry.io/otel/trace v1.28.0 // indirect
 	go.uber.org/multierr v1.10.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20240528184218-531527333157 // indirect
-	google.golang.org/protobuf v1.34.2 // indirect
 )
 
 require (
@@ -32,6 +33,7 @@ require (
 	github.com/go-task/slim-sprig v0.0.0-20230315185526-52ccab3ef572 // indirect
 	github.com/google/pprof v0.0.0-20210407192527-94a9f03dee38 // indirect
 	github.com/onsi/ginkgo/v2 v2.9.5 // indirect
+	github.com/paveletto99/go-pobo v0.0.0-20240903073530-4a13944361d9
 	github.com/quic-go/qpack v0.4.0 // indirect
 	github.com/quic-go/quic-go v0.45.1
 	github.com/russross/blackfriday/v2 v2.1.0 // indirect

@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/paveletto99/go-pobo/pkg/logging"
+	"github.com/paveletto99/microservice-blueprint/pkg/logging"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 

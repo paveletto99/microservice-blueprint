@@ -10,9 +10,9 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
-	"github.com/paveletto99/go-pobo/internal/serverenv"
-	"github.com/paveletto99/go-pobo/pkg/logging"
+	"github.com/paveletto99/microservice-blueprint/internal/serverenv"
 	payment "github.com/paveletto99/microservice-blueprint/pkg/api/payment/v1"
+	"github.com/paveletto99/microservice-blueprint/pkg/logging"
 )
 
 // Server is the admin server.

@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/paveletto99/go-pobo/pkg/logging"
-	"github.com/paveletto99/go-pobo/pkg/observability"
+	"github.com/paveletto99/microservice-blueprint/pkg/logging"
+	"github.com/paveletto99/microservice-blueprint/pkg/observability"
 	"github.com/quic-go/quic-go/http3"
 	"google.golang.org/grpc"
 )
