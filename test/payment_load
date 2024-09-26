@@ -5,5 +5,5 @@ ghz --insecure --async \
   --proto ../internal/pb/payment/payment.proto \
   --call payment.Payment/Create \
   -d '{"price": 0.1234}' \
-  0.0.0.0:50051
+  0.0.0.0:50052
   # --load-schedule=line --load-start=5 --load-step=5 \

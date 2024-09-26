@@ -17,7 +17,7 @@ type Config struct {
 	// SecretManager         secrets.Config
 	// ObservabilityExporter observability.Config
 
-	Port           string        `env:"PORT, default=8080"`
+	Port           string        `env:"PORT, default=50051"`
 	MaxRecords     uint32        `env:"MAX_RECORDS, default=500"`
 	Timeout        time.Duration `env:"RPC_TIMEOUT, default=5m"`
 	TruncateWindow time.Duration `env:"TRUNCATE_WINDOW, default=1h"`

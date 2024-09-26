@@ -15,11 +15,11 @@
 // Package serverenv defines common parameters for the sever environment.
 package serverenv
 
-import (
+import "context"
+
 // "context"
 // "crypto"
 // "fmt"
-)
 
 // ExporterFunc defines a factory function for creating a context aware metrics exporter.
 // type ExporterFunc func(context.Context) metrics.Exporter
@@ -38,21 +38,21 @@ type ServerEnv struct {
 // Option defines function types to modify the ServerEnv on creation.
 type Option func(*ServerEnv) *ServerEnv
 
-// // New creates a new ServerEnv with the requested options.
-// func New(ctx context.Context, opts ...Option) *ServerEnv {
-// 	env := &ServerEnv{}
-// 	// A metrics exporter is required, installs the default log based one.
-// 	// Can be overridden by opts.
-// 	env.exporter = func(ctx context.Context) metrics.Exporter {
-// 		return metrics.NewLogsBasedFromContext(ctx)
-// 	}
+// New creates a new ServerEnv with the requested options.
+func New(ctx context.Context, opts ...Option) *ServerEnv {
+	env := &ServerEnv{}
+	// A metrics exporter is required, installs the default log based one.
+	// Can be overridden by opts.
+	// env.exporter = func(ctx context.Context) metrics.Exporter {
+	// 	return metrics.NewLogsBasedFromContext(ctx)
+	// }
 
-// 	for _, f := range opts {
-// 		env = f(env)
-// 	}
+	for _, f := range opts {
+		env = f(env)
+	}
 
-// 	return env
-// }
+	return env
+}
 
 // // WithDatabase attached a database to the environment.
 // func WithDatabase(db *database.DB) Option {
@@ -159,21 +159,21 @@ type Option func(*ServerEnv) *ServerEnv
 // 	return s.exporter(ctx)
 // }
 
-// // Close shuts down the server env, closing database connections, etc.
-// func (s *ServerEnv) Close(ctx context.Context) error {
-// 	if s == nil {
-// 		return nil
-// 	}
+// Close shuts down the server env, closing database connections, etc.
+func (s *ServerEnv) Close(ctx context.Context) error {
+	if s == nil {
+		return nil
+	}
 
-// 	if s.database != nil {
-// 		s.database.Close(ctx)
-// 	}
+	// if s.database != nil {
+	// 	s.database.Close(ctx)
+	// }
 
-// 	if s.observabilityExporter != nil {
-// 		if err := s.observabilityExporter.Close(); err != nil {
-// 			return nil
-// 		}
-// 	}
+	// if s.observabilityExporter != nil {
+	// 	if err := s.observabilityExporter.Close(); err != nil {
+	// 		return nil
+	// 	}
+	// }
 
-// 	return nil
-// }
+	return nil
+}

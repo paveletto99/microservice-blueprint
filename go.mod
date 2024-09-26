@@ -38,6 +38,7 @@ require (
 	github.com/quic-go/qpack v0.4.0 // indirect
 	github.com/quic-go/quic-go v0.45.1
 	github.com/russross/blackfriday/v2 v2.1.0 // indirect
+	github.com/sethvargo/go-envconfig v1.1.0
 	github.com/xrash/smetrics v0.0.0-20201216005158-039620a65673 // indirect
 	go.opencensus.io v0.24.0
 	go.opentelemetry.io/otel v1.28.0

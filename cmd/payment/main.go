@@ -13,7 +13,7 @@ import (
 
 	payment "github.com/paveletto99/microservice-blueprint/internal/payment"
 	p "github.com/paveletto99/microservice-blueprint/internal/pb/payment"
-	"github.com/paveletto99/microservice-blueprint/internal/serverenv"
+	"github.com/paveletto99/microservice-blueprint/internal/setup"
 	"github.com/paveletto99/microservice-blueprint/pkg/logging"
 	"github.com/paveletto99/microservice-blueprint/pkg/server"
 )
@@ -50,14 +50,11 @@ func realMain(ctx context.Context) error {
 
 	var config payment.Config
 
-	config.Port = "50051"
-
-	// env, err := setup.Setup(ctx, &config)
-	// if err != nil {
-	// 	return fmt.Errorf("setup.Setup: %w", err)
-	// }
-	// defer env.Close(ctx)
-	env := &serverenv.ServerEnv{}
+	env, err := setup.Setup(ctx, &config)
+	if err != nil {
+		return fmt.Errorf("setup.Setup: %w", err)
+	}
+	defer env.Close(ctx)
 
 	payserver := payment.NewServer(env, &config)
 
@@ -71,9 +68,9 @@ func realMain(ctx context.Context) error {
 		sopts = append(sopts, grpc.Creds(creds))
 	}
 
-	if !config.AllowAnyClient {
-		// sopts = append(sopts, grpc.UnaryInterceptor(federationServer.(*federationout.Server).AuthInterceptor))
-	}
+	// if !config.AllowAnyClient {
+	// sopts = append(sopts, grpc.UnaryInterceptor(federationServer.(*federationout.Server).AuthInterceptor))
+	// }
 
 	sopts = append(sopts, grpc.StatsHandler(&ocgrpc.ServerHandler{}))
 	grpcServer := grpc.NewServer(sopts...)

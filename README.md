@@ -9,7 +9,7 @@ Use this as a starting point for Go programs, CLI tools, Services, Daemons, Libr
 
 ## TODO
 
-- grpc
+- database
 - add otel
 - add prom metrics
 - nats
