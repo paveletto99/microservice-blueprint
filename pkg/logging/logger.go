@@ -85,6 +85,13 @@ func FromContext(ctx context.Context) *slog.Logger {
 	return DefaultLogger()
 }
 
+func FromNamedContext(ctx context.Context, key contextKey) *slog.Logger {
+	if logger, ok := ctx.Value(key).(*slog.Logger); ok && logger != nil {
+		return logger
+	}
+	return DefaultLogger()
+}
+
 const (
 	levelDebug     = "DEBUG"
 	levelInfo      = "INFO"

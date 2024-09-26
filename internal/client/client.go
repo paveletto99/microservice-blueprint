@@ -12,7 +12,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
-	payment "github.com/paveletto99/microservice-blueprint/pkg/api/payment/v1"
+	p "github.com/paveletto99/microservice-blueprint/internal/pb/payment"
 )
 
 // Server is the admin server.
@@ -36,8 +36,8 @@ func NewClient(ctx context.Context, config *Config, env *serverenv.ServerEnv) (*
 
 	defer conn.Close()
 
-	paymentClient := payment.NewPaymentClient(conn)
-	_, err = paymentClient.Create(ctx, &payment.CreatePaymentRequest{Price: 23})
+	paymentClient := p.NewPaymentClient(conn)
+	_, err = paymentClient.Create(ctx, &p.CreatePaymentRequest{Price: 23})
 	if err != nil {
 		logging.Info(ctx, "Don't worry, we don't expect to see it is working.")
 	}

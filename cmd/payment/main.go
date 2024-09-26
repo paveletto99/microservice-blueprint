@@ -6,13 +6,16 @@ import (
 	"os/signal"
 	"syscall"
 
-	// "github.com/paveletto99/microservice-blueprint/internal/serverenv"
-	"github.com/paveletto99/microservice-blueprint/internal/service"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
+
+	"go.opencensus.io/plugin/ocgrpc"
+
+	payment "github.com/paveletto99/microservice-blueprint/internal/payment"
+	p "github.com/paveletto99/microservice-blueprint/internal/pb/payment"
+	"github.com/paveletto99/microservice-blueprint/internal/serverenv"
 	"github.com/paveletto99/microservice-blueprint/pkg/logging"
 	"github.com/paveletto99/microservice-blueprint/pkg/server"
-	// "github.com/paveletto99/microservice-blueprint/utils"
-	payment "github.com/paveletto99/microservice-blueprint/internal/payment"
-	"google.golang.org/grpc"
 )
 
 func main() {
@@ -45,18 +48,36 @@ func main() {
 func realMain(ctx context.Context) error {
 	logger := logging.FromContext(ctx)
 
-	var config service.Config
+	var config payment.Config
+
+	config.Port = "50051"
 
 	// env, err := setup.Setup(ctx, &config)
 	// if err != nil {
 	// 	return fmt.Errorf("setup.Setup: %w", err)
 	// }
 	// defer env.Close(ctx)
-	// env := &serverenv.ServerEnv{}
+	env := &serverenv.ServerEnv{}
+
+	payserver := payment.NewServer(env, &config)
 
 	var sopts []grpc.ServerOption
+
+	if config.TLSCertFile != "" && config.TLSKeyFile != "" {
+		creds, err := credentials.NewServerTLSFromFile(config.TLSCertFile, config.TLSKeyFile)
+		if err != nil {
+			return fmt.Errorf("failed to create credentials: %w", err)
+		}
+		sopts = append(sopts, grpc.Creds(creds))
+	}
+
+	if !config.AllowAnyClient {
+		// sopts = append(sopts, grpc.UnaryInterceptor(federationServer.(*federationout.Server).AuthInterceptor))
+	}
+
+	sopts = append(sopts, grpc.StatsHandler(&ocgrpc.ServerHandler{}))
 	grpcServer := grpc.NewServer(sopts...)
-	payment.RegisterPaymentServer(grpcServer, payment.UnimplementedPaymentServer{})
+	p.RegisterPaymentServer(grpcServer, payserver)
 
 	srv, err := server.New(config.Port)
 	if err != nil {

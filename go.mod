@@ -17,6 +17,7 @@ require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/go-logr/logr v1.4.2 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
+	github.com/golang/groupcache v0.0.0-20200121045136-8c9f03a8e57e // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/prometheus/client_model v0.6.1 // indirect
@@ -38,6 +39,7 @@ require (
 	github.com/quic-go/quic-go v0.45.1
 	github.com/russross/blackfriday/v2 v2.1.0 // indirect
 	github.com/xrash/smetrics v0.0.0-20201216005158-039620a65673 // indirect
+	go.opencensus.io v0.24.0
 	go.opentelemetry.io/otel v1.28.0
 	go.uber.org/mock v0.4.0 // indirect
 	golang.org/x/crypto v0.24.0 // indirect

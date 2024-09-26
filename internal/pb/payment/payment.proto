@@ -1,6 +1,8 @@
 syntax = "proto3";
 
-option go_package="github.com/paveletto99/microservice-blueprint/pkg/api/payment/v1";
+package payment;
+
+option go_package="github.com/paveletto99/microservice-blueprint/internal/pb/payment";
 
 message CreatePaymentRequest {
   float price =1;

@@ -1,0 +1,9 @@
+#!/bin/bash
+
+ghz --insecure --async \
+  -c 100 -n 1000000 \
+  --proto ../internal/pb/payment/payment.proto \
+  --call payment.Payment/Create \
+  -d '{"price": 0.1234}' \
+  0.0.0.0:50051
+  # --load-schedule=line --load-start=5 --load-step=5 \

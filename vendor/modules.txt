@@ -14,6 +14,9 @@ github.com/cpuguy83/go-md2man/v2/md2man
 # github.com/go-task/slim-sprig v0.0.0-20230315185526-52ccab3ef572
 ## explicit; go 1.13
 github.com/go-task/slim-sprig
+# github.com/golang/groupcache v0.0.0-20200121045136-8c9f03a8e57e
+## explicit
+github.com/golang/groupcache/lru
 # github.com/google/go-cmp v0.6.0
 ## explicit; go 1.13
 github.com/google/go-cmp/cmp
@@ -100,6 +103,23 @@ github.com/urfave/cli/v2
 # github.com/xrash/smetrics v0.0.0-20201216005158-039620a65673
 ## explicit
 github.com/xrash/smetrics
+# go.opencensus.io v0.24.0
+## explicit; go 1.13
+go.opencensus.io
+go.opencensus.io/internal
+go.opencensus.io/internal/tagencoding
+go.opencensus.io/metric/metricdata
+go.opencensus.io/metric/metricproducer
+go.opencensus.io/plugin/ocgrpc
+go.opencensus.io/resource
+go.opencensus.io/stats
+go.opencensus.io/stats/internal
+go.opencensus.io/stats/view
+go.opencensus.io/tag
+go.opencensus.io/trace
+go.opencensus.io/trace/internal
+go.opencensus.io/trace/propagation
+go.opencensus.io/trace/tracestate
 # go.opentelemetry.io/otel v1.28.0
 ## explicit; go 1.21
 # go.opentelemetry.io/otel/sdk v1.28.0
