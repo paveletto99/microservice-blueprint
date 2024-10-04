@@ -15,5 +15,18 @@ spec:
         app: ko-app
     spec:
       containers:
-        - image: ko://cmd/main.go
-          name: ko
+      - image: ko://cmd/main.go
+        name: ko
+        env:
+        - name: GOMAXPROCS
+          valueFrom:
+            resourceFieldRef:
+              resource: limits.cpu
+        resources:
+          requests:
+            memory: 128Mi
+            cpu: 500m
+          limits:
+            memory: 256Mi
+            cpu: 1000m
+
