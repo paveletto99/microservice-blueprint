@@ -2,10 +2,12 @@ package payment
 
 import (
 	"context"
+	"errors"
 
 	p "github.com/paveletto99/microservice-blueprint/internal/pb/payment"
 	"github.com/paveletto99/microservice-blueprint/internal/serverenv"
 	"github.com/paveletto99/microservice-blueprint/pkg/logging"
+	"google.golang.org/grpc/codes"
 )
 
 // Compile time assert that this server implements the required grpc interface.
@@ -38,9 +40,15 @@ func (s Server) Create(ctx context.Context, req *p.CreatePaymentRequest) (*p.Cre
 	// response, err := s.fetch(ctx, req, s.publishdb.IterateExposures, publishmodel.TruncateWindow(time.Now(), s.config.TruncateWindow)) // Don't fetch the current window, which isn't complete yet.
 	// if err != nil {
 	// 	stats.Record(ctx, mFetchFailed.M(1))
-	logger.Error("failed to fetch", "error")
+	// logger.Error("failed to fetch", "error")
 	// 	return nil, errors.New("internal error")
 	// }
+
+	// simulate error
+	if req.Price == 0.0 {
+		logger.Error("failed to fetch", "error")
+	}
+
 	response := p.CreatePaymentResponse{BillId: 0}
 
 	return &response, nil

@@ -1,0 +1,41 @@
+version: '3.8'
+
+services:
+  spire-server:
+    image: spiffe/spire-server:1.0.0
+    volumes:
+      - ./spire/server/conf:/opt/spire/conf
+      - ./spire/server/data:/opt/spire/data
+    command: ["spire-server", "run"]
+    ports:
+      - "8081:8081"
+
+  spire-agent:
+    image: spiffe/spire-agent:1.0.0
+    depends_on:
+      - spire-server
+    volumes:
+      - ./spire/agent/conf:/opt/spire/conf
+      - ./spire/agent/data:/opt/spire/data
+      - /var/run:/var/run
+    command: ["spire-agent", "run"]
+
+  grpc-server:
+    build:
+      context: ./server
+    depends_on:
+      - spire-agent
+    environment:
+      - SPIFFE_ENDPOINT_SOCKET=/var/run/spire-agent.sock
+    volumes:
+      - /var/run:/var/run
+
+  grpc-client:
+    build:
+      context: ./client
+    depends_on:
+      - grpc-server
+    environment:
+      - SPIFFE_ENDPOINT_SOCKET=/var/run/spire-agent.sock
+    volumes:
+      - /var/run:/var/run
