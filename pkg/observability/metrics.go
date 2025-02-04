@@ -14,6 +14,15 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
+type Metrics interface {
+	Fire(result string)
+	ResponseStatus(prefix string, status int)
+}
+
+type MetricsFactory interface {
+	Create(eventName string) Metrics
+}
+
 type MetricsDoneFunc func() error
 
 // ServeMetricsIfPrometheus serves the opentelemetry metrics at /metrics when
