@@ -6,6 +6,7 @@ Use this as a starting point for Go programs, CLI tools, Services, Daemons, Libr
 <https://github.com/apple/pkl?tab=readme-ov-file>
 <https://sourcegraph.com/github.com/scylladb/scylla-operator/-/blob/pkg/probeserver/scylladbapistatus/prober.go?L117:10-117:16>
 <https://packagemain.tech/p/graceful-shutdowns-k8s-go>
+<https://github.com/uber-go/mock/tree/main>
 
 ## TODO
 

@@ -6,14 +6,17 @@ package main
 
 import (
 	"context"
+	"fmt"
+	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
 	"github.com/paveletto99/go-pobo"
-	// "github.com/paveletto99/go-pobo/internal/service"
-	"github.com/sirupsen/logrus"
+	"github.com/paveletto99/microservice-blueprint/internal/serverenv"
+	"github.com/paveletto99/microservice-blueprint/internal/service"
+	"github.com/paveletto99/microservice-blueprint/pkg/server"
 	"github.com/urfave/cli/v2"
 )
 
@@ -24,17 +27,13 @@ type AppOptions struct {
 }
 
 func main() {
-	// setup logger
-	var log = logrus.New()
-	log.SetFormatter(&logrus.JSONFormatter{})
-	log.SetOutput(os.Stdout)
 	// setup context
 	_, done := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 
 	defer func() {
 		done()
 		if r := recover(); r != nil {
-			log.Fatal("application panic", "panic", r)
+			slog.Error("application panic", "panic", r)
 		}
 	}()
 
@@ -73,13 +72,21 @@ A longer sentence, about how exactly to use this program`,
 		HideHelp:             false,
 		HideVersion:          false,
 		Action: func(c *cli.Context) error {
-			// poboObject, _ := service.NewServer(log, &service.Config{Port: "6660"})
-			// err := poboObject.Run(ctx)
+			ctx, done := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+
+			defer func() {
+				done()
+				if r := recover(); r != nil {
+					slog.Error("😱 application panic", "panic", r)
+				}
+			}()
+			err := realMain(ctx)
+			if err != nil {
+				slog.Error("error running realMain", "error", err)
+			}
 			done()
-			// if err != nil {
-			// 	log.Fatal(err)
-			// }
-			// log.Info("successful shutdown 🌂")
+
+			slog.Info("successful shutdown 🌂")
 			return nil
 		},
 	}
@@ -89,7 +96,7 @@ A longer sentence, about how exactly to use this program`,
 	// Load environment variables
 	err = Environment()
 	if err != nil {
-		logrus.Error(err)
+		slog.Error("error loading environment", "error", err)
 		os.Exit(99)
 	}
 
@@ -99,7 +106,7 @@ A longer sentence, about how exactly to use this program`,
 	// Runtime
 	err = app.Run(os.Args)
 	if err != nil {
-		logrus.Error(err)
+		slog.Error("error running app", "error", err)
 		os.Exit(-1)
 	}
 }
@@ -108,9 +115,28 @@ A longer sentence, about how exactly to use this program`,
 // to initalize the runtime environments of the program.
 func Preloader() {
 	/* Flag parsing */
-	if cfg.verbose {
-		logrus.SetLevel(logrus.InfoLevel)
-	} else {
-		logrus.SetLevel(logrus.WarnLevel)
+}
+
+func realMain(ctx context.Context) error {
+
+	var config service.Config
+
+	// env, err := setup.Setup(ctx, &config)
+	// if err != nil {
+	// 	return fmt.Errorf("setup.Setup: %w", err)
+	// }
+	// defer env.Close(ctx)
+	env := &serverenv.ServerEnv{}
+	serviceServer, err := service.NewServer(&config, env)
+	if err != nil {
+		return fmt.Errorf("service.NewServer: %w", err)
 	}
+
+	srv, err := server.New(config.Port)
+	if err != nil {
+		return fmt.Errorf("server.New: %w", err)
+	}
+	slog.Info(fmt.Sprintf("listening on :%s", config.Port))
+
+	return srv.ServeHTTPHandler(ctx, serviceServer.Run(ctx))
 }

@@ -2,14 +2,22 @@ package utils
 
 import (
 	"bytes"
-	// "log"
 	"reflect"
 	"testing"
+
+	"github.com/spf13/viper"
 )
 
-// func assert(expected, got interface{}, field string) {
+func Assert(cond bool, msg string) {
+	ignoreAsserts := viper.GetBool("ignore-asserts")
+	if !ignoreAsserts && !cond {
+		panic(msg)
+	}
+}
+
+// func Assert(expected, got interface{}, field string) {
 // 	if !reflect.DeepEqual(expected, got) {
-// 		log.Fatalf("Expected %s to be [%+v (%T)], got: [%+v (%T)]", field, expected, expected, got, got)
+// 		slog.Error("Expected %s to be [%+v (%T)], got: [%+v (%T)]", field, expected, expected, got, got)
 // 	}
 // }
 

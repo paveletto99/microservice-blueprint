@@ -3,38 +3,34 @@ package main
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os/signal"
 	"syscall"
 
 	"github.com/paveletto99/microservice-blueprint/internal/serverenv"
 	"github.com/paveletto99/microservice-blueprint/internal/service"
-	"github.com/paveletto99/microservice-blueprint/pkg/logging"
 	"github.com/paveletto99/microservice-blueprint/pkg/server"
 )
 
 func main() {
 	ctx, done := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	logger := logging.NewLogger("Info", true)
-
-	ctx = logging.WithLogger(ctx, logger)
 
 	defer func() {
 		done()
 		if r := recover(); r != nil {
-			logger.Error("😱 application panic", "panic", r)
+			slog.Error("😱 application panic", "panic", r)
 		}
 	}()
 	err := realMain(ctx)
 	done()
 
 	if err != nil {
-		logger.Log(ctx, logging.LevelFatal, err.Error())
+		slog.ErrorContext(ctx, "😱 application error", "error", err)
 	}
-	logger.Info("successful shutdown")
+	slog.Info("successful shutdown")
 }
 
 func realMain(ctx context.Context) error {
-	logger := logging.FromContext(ctx)
 
 	var config service.Config
 
@@ -53,7 +49,7 @@ func realMain(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("server.New: %w", err)
 	}
-	logger.Info(fmt.Sprintf("listening on :%s", config.Port))
+	slog.Info(fmt.Sprintf("listening on :%s", config.Port))
 
 	return srv.ServeHTTPHandler(ctx, serviceServer.Run(ctx))
 }

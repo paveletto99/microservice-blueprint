@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -12,7 +13,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/paveletto99/microservice-blueprint/pkg/logging"
 	"github.com/paveletto99/microservice-blueprint/pkg/observability"
 	"github.com/quic-go/quic-go/http3"
 	"google.golang.org/grpc"
@@ -62,8 +62,6 @@ func NewFromListener(listener net.Listener) (*Server, error) {
 }
 
 func (s *Server) ServeHTTP3(ctx context.Context, srv *http3.Server) error {
-	logger := logging.FromContext(ctx)
-
 	ctx, cancel := signal.NotifyContext(ctx, os.Interrupt)
 	defer cancel()
 
@@ -74,7 +72,7 @@ func (s *Server) ServeHTTP3(ctx context.Context, srv *http3.Server) error {
 	}
 
 	go func() {
-		logger.Info(fmt.Sprintf("listening on %s\n", srv.Addr))
+		slog.Info(fmt.Sprintf("listening on %s\n", srv.Addr))
 		if err := srv.ListenAndServeTLS("./tools/certs/certificate.pem", "./tools/certs/certificate.key"); err != nil && err != http.ErrServerClosed {
 			fmt.Fprintf(os.Stderr, "error listening and serving: %s\n", err)
 		}
@@ -97,7 +95,7 @@ func (s *Server) ServeHTTP3(ctx context.Context, srv *http3.Server) error {
 	// Shutdown the prometheus metrics proxy.
 	if metricsDone != nil {
 		if err := metricsDone(); err != nil {
-			logger.Error("failed to close metrics exporter: %w", err)
+			slog.Error("failed to close metrics exporter: %w", err)
 		}
 	}
 
@@ -110,19 +108,17 @@ func (s *Server) ServeHTTP3(ctx context.Context, srv *http3.Server) error {
 //
 // Once a server has been stopped, it is NOT safe for reuse.
 func (s *Server) ServeHTTP(ctx context.Context, srv *http.Server) error {
-	logger := logging.FromContext(ctx)
-
 	// Spawn a goroutine that listens for context closure. When the context is
 	// closed, the server is stopped.
 	errCh := make(chan error, 1)
 	go func() {
 		<-ctx.Done()
 
-		logger.Debug("server.Serve: context closed")
+		slog.DebugContext(ctx, "server.Serve: context closed")
 		shutdownCtx, done := context.WithTimeout(context.Background(), 5*time.Second)
 		defer done()
 
-		logger.Debug("server.Serve: shutting down")
+		slog.DebugContext(ctx, "server.Serve: shutting down")
 		errCh <- srv.Shutdown(shutdownCtx)
 	}()
 
@@ -180,7 +176,6 @@ func (s *Server) ServeHTTPHandler(ctx context.Context, handler http.Handler) err
 //
 // Once a server has been stopped, it is NOT safe for reuse.
 func (s *Server) ServeGRPC(ctx context.Context, srv *grpc.Server) error {
-	logger := logging.FromContext(ctx)
 
 	// Spawn a goroutine that listens for context closure. When the context is
 	// closed, the server is stopped.
@@ -188,8 +183,8 @@ func (s *Server) ServeGRPC(ctx context.Context, srv *grpc.Server) error {
 	go func() {
 		<-ctx.Done()
 
-		logger.Debug("server.Serve: context closed")
-		logger.Debug("server.Serve: shutting down")
+		slog.DebugContext(ctx, "server.Serve: context closed")
+		slog.DebugContext(ctx, "server.Serve: shutting down")
 		srv.GracefulStop()
 	}()
 
@@ -198,7 +193,7 @@ func (s *Server) ServeGRPC(ctx context.Context, srv *grpc.Server) error {
 		return fmt.Errorf("failed to serve: %w", err)
 	}
 
-	logger.Debug("server.Serve: serving stopped")
+	slog.Debug("server.Serve: serving stopped")
 
 	// Return any errors that happened during shutdown.
 	select {

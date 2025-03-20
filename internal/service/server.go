@@ -9,6 +9,7 @@ import (
 	"net/http"
 
 	"github.com/paveletto99/microservice-blueprint/internal/serverenv"
+	"github.com/paveletto99/microservice-blueprint/utils"
 )
 
 // Server is the admin server.
@@ -22,6 +23,7 @@ func NewServer(config *Config, env *serverenv.ServerEnv) (*Server, error) {
 	// if env.Database() == nil {
 	// 	return nil, fmt.Errorf("missing Database in server env")
 	// }
+	utils.Assert(config != nil, "missing config")
 	return &Server{
 		config: config,
 		env:    env,
@@ -35,7 +37,7 @@ func someMiddleware(handler http.Handler) http.Handler {
 }
 
 func addRoutes(mux *http.ServeMux) *http.ServeMux {
-	// mux.Handle("/", http.NotFoundHandler())
+	mux.Handle("/", http.NotFoundHandler())
 	mux.Handle("/healthz", HandleHealthz())
 	return mux
 }

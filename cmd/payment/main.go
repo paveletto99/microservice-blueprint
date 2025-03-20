@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os/signal"
 	"syscall"
 
@@ -27,8 +28,8 @@ func main() {
 	defer func() {
 		done()
 		if r := recover(); r != nil {
-			logger.Log(
-				context.Background(), logging.LevelPanic,
+			slog.Log(
+				context.Background(), slog.LevelError,
 				fmt.Sprintf("😱 application panic: %s", r),
 			)
 		}
