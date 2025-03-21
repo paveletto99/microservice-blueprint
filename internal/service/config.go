@@ -12,8 +12,8 @@ type Config struct {
 	// KeyManager    keys.Config
 	// SecretManager secrets.Config
 	// Storage       storage.Config
-
-	Port string `env:"PORT, default=8080"`
+	ProfilingEnabled bool   `env:"PROFILING_ENABLED, default=false"`
+	Port             string `env:"PORT, default=8080"`
 }
 
 // func (c *Config) DatabaseConfig() *database.Config {

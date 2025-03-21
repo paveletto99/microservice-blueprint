@@ -7,6 +7,8 @@ package service
 import (
 	"context"
 	"net/http"
+	"os"
+	"runtime/pprof"
 
 	"github.com/paveletto99/microservice-blueprint/internal/serverenv"
 	"github.com/paveletto99/microservice-blueprint/utils"
@@ -23,6 +25,13 @@ func NewServer(config *Config, env *serverenv.ServerEnv) (*Server, error) {
 	// if env.Database() == nil {
 	// 	return nil, fmt.Errorf("missing Database in server env")
 	// }
+	if config.ProfilingEnabled {
+		p, _ := os.Create("/tmp/pprof.prof")
+		pprof.StartCPUProfile(p)
+		defer p.Close()
+		defer pprof.StopCPUProfile()
+	}
+
 	utils.Assert(config != nil, "missing config")
 	return &Server{
 		config: config,
