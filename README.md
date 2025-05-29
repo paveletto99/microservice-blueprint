@@ -10,11 +10,10 @@ Use this as a starting point for Go programs, CLI tools, Services, Daemons, Libr
 
 ## TODO
 
-- database
-- add otel
-- add prom metrics
+- database - vitess/scylla
+- add otel - ebpf auto-instrumentation
+- add prom metrics - add otel metrics
 - nats
-- scylla
 - spiffe/spire
 
 ## SPIFFE NOTES

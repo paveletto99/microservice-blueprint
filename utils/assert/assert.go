@@ -6,6 +6,8 @@ import (
 	"testing"
 )
 
+// this package provides utility functions for assertions in tests.
+
 func isEmpty(obj interface{}) bool {
 	if obj == nil {
 		return true
@@ -24,7 +26,7 @@ func isEmpty(obj interface{}) bool {
 }
 
 func Empty(t *testing.T, obj interface{}) {
-	if !isEmpty(obj) {
+	if isEmpty(obj) {
 		t.Errorf("%v is not empty", obj)
 	}
 }

@@ -12,6 +12,7 @@ import (
 
 	"github.com/paveletto99/microservice-blueprint/internal/serverenv"
 	"github.com/paveletto99/microservice-blueprint/utils"
+	"github.com/paveletto99/microservice-blueprint/utils/assert"
 )
 
 // Server is the admin server.
@@ -32,7 +33,7 @@ func NewServer(config *Config, env *serverenv.ServerEnv) (*Server, error) {
 		defer pprof.StopCPUProfile()
 	}
 
-	utils.Assert(config != nil, "missing config")
+	utils.Assert(config != nil, "config must not be nil")
 	return &Server{
 		config: config,
 		env:    env,

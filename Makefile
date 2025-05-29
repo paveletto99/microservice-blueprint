@@ -78,7 +78,6 @@ ko-del:
 	ko delete -f config/
 .PHONY: ko-del
 
-
 local-repo:
 	docker run -d --net=kind --restart=always -p "$(local_docker_repo):5000" --name "kind-registry" registry:2
 .PHONY: local-repo
