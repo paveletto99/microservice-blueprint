@@ -46,5 +46,21 @@ func SetupWith(ctx context.Context, config interface{}, l envconfig.Lookuper) (*
 	}
 	slog.Info("provided", "config", config)
 
+	// Setup the database connection.
+	if provider, ok := config.(DatabaseConfigProvider); ok {
+		slog.Info("configuring database")
+
+		dbConfig := provider.DatabaseConfig()
+		db, err := database.NewFromEnv(ctx, dbConfig)
+		if err != nil {
+			return nil, fmt.Errorf("unable to connect to database: %w", err)
+		}
+
+		// Update serverEnv setup.
+		serverEnvOpts = append(serverEnvOpts, serverenv.WithDatabase(db))
+
+		slog.Info("database", "config", dbConfig)
+	}
+
 	return serverenv.New(ctx, serverEnvOpts...), nil
 }
