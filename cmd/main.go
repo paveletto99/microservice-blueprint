@@ -14,8 +14,8 @@ import (
 	"time"
 
 	"github.com/paveletto99/go-pobo"
-	"github.com/paveletto99/microservice-blueprint/internal/serverenv"
-	"github.com/paveletto99/microservice-blueprint/internal/service"
+	"github.com/paveletto99/microservice-blueprint/internal/backup"
+	"github.com/paveletto99/microservice-blueprint/internal/setup"
 	"github.com/paveletto99/microservice-blueprint/pkg/server"
 	"github.com/urfave/cli/v2"
 )
@@ -30,6 +30,8 @@ func main() {
 	// setup context
 	_, done := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	slog.SetDefault(logger)
 	defer func() {
 		done()
 		if r := recover(); r != nil {
@@ -119,24 +121,24 @@ func Preloader() {
 
 func realMain(ctx context.Context) error {
 
-	var config service.Config
-
-	// env, err := setup.Setup(ctx, &config)
-	// if err != nil {
-	// 	return fmt.Errorf("setup.Setup: %w", err)
-	// }
-	// defer env.Close(ctx)
-	env := &serverenv.ServerEnv{}
-	serviceServer, err := service.NewServer(&config, env)
+	var config backup.Config
+	// Setup the environment and configuration
+	env, err := setup.Setup(ctx, &config)
 	if err != nil {
-		return fmt.Errorf("service.NewServer: %w", err)
+		return fmt.Errorf("setup.Setup: %w", err)
+	}
+	defer env.Close(ctx)
+
+	backupServer, err := backup.NewServer(&config, env)
+	if err != nil {
+		return fmt.Errorf("backup.NewServer: %w", err)
 	}
 
 	srv, err := server.New(config.Port)
 	if err != nil {
 		return fmt.Errorf("server.New: %w", err)
 	}
-	slog.Info(fmt.Sprintf("listening on :%s", config.Port))
+	slog.Info("listening on: ", config.Port)
 
-	return srv.ServeHTTPHandler(ctx, serviceServer.Run(ctx))
+	return srv.ServeHTTPHandler(ctx, backupServer.Run(ctx))
 }

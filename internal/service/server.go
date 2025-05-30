@@ -6,13 +6,13 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"os"
 	"runtime/pprof"
 
 	"github.com/paveletto99/microservice-blueprint/internal/serverenv"
 	"github.com/paveletto99/microservice-blueprint/utils"
-	"github.com/paveletto99/microservice-blueprint/utils/assert"
 )
 
 // Server is the admin server.
@@ -23,9 +23,9 @@ type Server struct {
 
 // NewServer makes a new admin console server.
 func NewServer(config *Config, env *serverenv.ServerEnv) (*Server, error) {
-	// if env.Database() == nil {
-	// 	return nil, fmt.Errorf("missing Database in server env")
-	// }
+	if env.Database() == nil {
+		return nil, fmt.Errorf("missing Database in server env")
+	}
 	if config.ProfilingEnabled {
 		p, _ := os.Create("/tmp/pprof.prof")
 		pprof.StartCPUProfile(p)

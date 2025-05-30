@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 	"os/signal"
 	"syscall"
 
@@ -15,15 +16,13 @@ import (
 	payment "github.com/paveletto99/microservice-blueprint/internal/payment"
 	p "github.com/paveletto99/microservice-blueprint/internal/pb/payment"
 	"github.com/paveletto99/microservice-blueprint/internal/setup"
-	"github.com/paveletto99/microservice-blueprint/pkg/logging"
 	"github.com/paveletto99/microservice-blueprint/pkg/server"
 )
 
 func main() {
 	ctx, done := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	logger := logging.NewLogger("Info", true)
-
-	ctx = logging.WithLogger(ctx, logger)
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	slog.SetDefault(logger)
 
 	defer func() {
 		done()
@@ -38,8 +37,7 @@ func main() {
 	done()
 
 	if err != nil {
-		logger.Log(
-			context.Background(), logging.LevelFatal,
+		slog.Error(
 			fmt.Sprintf("😱 %s", err.Error()),
 		)
 	}
@@ -47,7 +45,6 @@ func main() {
 }
 
 func realMain(ctx context.Context) error {
-	logger := logging.FromContext(ctx)
 
 	var config payment.Config
 
@@ -81,7 +78,7 @@ func realMain(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("server.New: %w", err)
 	}
-	logger.Info(fmt.Sprintf("listening on :%s", config.Port))
+	slog.Info(fmt.Sprintf("listening on :%s", config.Port))
 
 	return srv.ServeGRPC(ctx, grpcServer)
 }
