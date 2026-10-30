@@ -1,0 +1,5 @@
+FROM ghcr.io/spiffe/spire-server:1.15.5@sha256:584a9c5cc95b9457f5033e7e4488d603fffe5ec48a80c4dba14b05c5e1c2c384 AS spire
+FROM python:3.14-slim@sha256:cd89c30eda26ee911a4611b18680086e0ea42e6f5f8cbe653d07fa7958c9cec8
+COPY --from=spire /opt/spire/bin/spire-server /opt/spire/bin/spire-server
+COPY docker/spiffe/bootstrap.py /bootstrap.py
+ENTRYPOINT ["python3", "/bootstrap.py"]

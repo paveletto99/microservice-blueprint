@@ -1,0 +1,11 @@
+# Reuse the existing healthcheck path without changing application or certificate code.
+FROM golang:1.27.3@sha256:2920bb124f1a2e12a1d39f0cab756ae0068441ee1da7655dec7f5e374944095b AS healthcheck
+WORKDIR /src
+COPY go.mod go.sum ./
+COPY cmd/service-a ./cmd/service-a
+COPY internal ./internal
+COPY pkg/logging ./pkg/logging
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build CGO_ENABLED=0 go build -mod=mod -trimpath -ldflags="-s -w" -o /healthcheck ./cmd/service-a
+FROM envoyproxy/envoy:v1.40.2@sha256:8de97e654644827d62afdbf7e1d3dc9fee01a8690d410dd1c63a30dc6b6cecbb
+COPY --from=healthcheck /healthcheck /usr/local/bin/healthcheck
+ENTRYPOINT ["/usr/local/bin/envoy"]

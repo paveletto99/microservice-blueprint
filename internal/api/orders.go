@@ -2,13 +2,15 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
+	"time"
 
 	"github.com/paveletto99/microservice-blueprint/internal/auth"
+	"github.com/paveletto99/microservice-blueprint/internal/orders"
 	"github.com/paveletto99/microservice-blueprint/pkg/logging"
 )
 
@@ -21,9 +23,9 @@ func jsonResponse(w http.ResponseWriter, status int, body any) {
 }
 
 // NewServiceBHandler keeps liveness public and puts authentication before frozen route policies.
-func NewServiceBHandler(verifier *auth.Verifier, allowedClients ...string) (http.Handler, error) {
-	if verifier == nil {
-		return nil, errors.New("demo API: verifier is required")
+func NewServiceBHandler(verifier *auth.Verifier, store orders.Store, allowedClients ...string) (http.Handler, error) {
+	if verifier == nil || store == nil {
+		return nil, errors.New("API: verifier and order store are required")
 	}
 	if len(allowedClients) == 0 {
 		return nil, errors.New("API: an explicit client allowlist is required")
@@ -35,7 +37,9 @@ func NewServiceBHandler(verifier *auth.Verifier, allowedClients ...string) (http
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { jsonResponse(w, 200, map[string]string{"status": "ok"}) })
 	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
-		if !verifier.Ready() {
+		ctx, cancel := context.WithTimeout(r.Context(), time.Second)
+		defer cancel()
+		if !verifier.Ready() || store.Health(ctx) != nil {
 			http.Error(w, "not ready", 503)
 			return
 		}
@@ -53,35 +57,19 @@ func NewServiceBHandler(verifier *auth.Verifier, allowedClients ...string) (http
 		}
 	})
 	authorizer := auth.Authorizer{}
+	handlers := orderHandlers{store: store}
 	for _, route := range []struct {
 		pattern string
 		policy  auth.Policy
-		status  int
+		handler http.HandlerFunc
 	}{
-		{"GET /orders", auth.Policy{Scopes: auth.All("orders:read"), Roles: auth.Any("orders:reader", "orders:admin"), Clients: auth.Any(allowedClients...)}, 200},
-		{"POST /orders", auth.Policy{Scopes: auth.All("orders:write"), Roles: auth.Any("orders:writer", "orders:admin"), Clients: auth.Any(allowedClients...)}, 201},
-		{"DELETE /orders/{id}", auth.Policy{Scopes: auth.All("orders:delete"), Roles: auth.All("orders:admin", "orders:delete"), Clients: auth.Any(allowedClients...)}, 204},
+		{"GET /orders", auth.Policy{Scopes: auth.All("orders:read"), Roles: auth.Any("orders:reader", "orders:admin"), Clients: auth.Any(allowedClients...)}, handlers.list},
+		{"GET /orders/{id}", auth.Policy{Scopes: auth.All("orders:read"), Roles: auth.Any("orders:reader", "orders:admin"), Clients: auth.Any(allowedClients...)}, handlers.get},
+		{"POST /orders", auth.Policy{Scopes: auth.All("orders:write"), Roles: auth.Any("orders:writer", "orders:admin"), Clients: auth.Any(allowedClients...)}, handlers.create},
+		{"PUT /orders/{id}", auth.Policy{Scopes: auth.All("orders:write"), Roles: auth.Any("orders:writer", "orders:admin"), Clients: auth.Any(allowedClients...)}, handlers.update},
+		{"DELETE /orders/{id}", auth.Policy{Scopes: auth.All("orders:delete"), Roles: auth.All("orders:admin", "orders:delete"), Clients: auth.Any(allowedClients...)}, handlers.delete},
 	} {
-		status := route.status
-		handler, err := authorizer.Protect(route.policy, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.Body != nil {
-				body, err := io.ReadAll(io.LimitReader(r.Body, 4097))
-				if err != nil || len(body) > 4096 {
-					http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
-					return
-				}
-			}
-			claims, ok := auth.ClaimsFromContext(r.Context())
-			if !ok {
-				http.Error(w, "unauthorized", 401)
-				return
-			}
-			if status == 204 {
-				w.WriteHeader(status)
-				return
-			}
-			jsonResponse(w, status, map[string]any{"caller": claims.ClientID, "orders": []map[string]string{{"id": "demo-1", "item": "example"}}})
-		}))
+		handler, err := authorizer.Protect(route.policy, route.handler)
 		if err != nil {
 			return nil, err
 		}

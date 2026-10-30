@@ -3,7 +3,7 @@ WORKDIR /src
 COPY go.mod go.sum ./
 COPY cmd/service-b ./cmd/service-b
 COPY internal ./internal
-COPY pkg/logging ./pkg/logging
+COPY pkg ./pkg
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build CGO_ENABLED=0 go build -mod=mod -trimpath -ldflags="-s -w" -o /app ./cmd/service-b
 FROM gcr.io/distroless/static-debian13@sha256:15f8637509792e05b97d83451b0b6ccfa4abd548f997e406ac1e72c87fe1fa78
 USER 65532:65532

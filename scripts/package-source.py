@@ -9,10 +9,18 @@ files = {root / name for name in (
     "README.md", "LICENSE", "go.mod", "go.sum", "compile_meta.go", ".env.example",
     ".gitignore", ".dockerignore", "compose.yaml",
     "Dockerfile.service-a", "Dockerfile.service-b", "docs/service-auth.md",
+    "compose.spiffe.yaml", "Dockerfile.spiffe-bootstrap", "Dockerfile.spiffe-envoy",
+    "Dockerfile.spiffe-db-probe", "docs/spiffe-envoy.md", "scripts/generate-spiffe-envoy.py",
+    "test/spiffe/test_envoy_config.py",
+    "Dockerfile.vitess-migrate", "docs/orders-vitess.md", "scripts/orders-crud-smoke.py",
 )}
+for name in ("server.conf", "agent.conf", "bootstrap.py", "init-volumes.py", "vitess.sh", "probe.py"):
+    files.add(root / "docker/spiffe" / name)
+for role in ("service-a", "service-b", "vtgate", "unauthorized"):
+    files.add(root / "docker/spiffe/envoy" / (role + ".json"))
 for directory in ("cmd", "internal", "pkg", "utils", "test"):
     for path in (root / directory).rglob("*"):
-        if path.suffix in (".go", ".proto") and path.is_file():
+        if (path.suffix in (".go", ".proto") or (directory == "internal" and path.suffix == ".sql" and "orders/migrations" in str(path))) and path.is_file():
             files.add(path)
 files.update((root / "scripts").glob("*.sh"))
 files.add(Path(__file__).resolve())

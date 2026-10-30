@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/paveletto99/microservice-blueprint/pkg/logging"
-	vit "vitess.io/vitess/go/vt/vitessdriver"
 )
 
 type DB struct {
@@ -20,19 +19,10 @@ type DB struct {
 // process's environment variables. This should be called just once per server
 // instance.
 func NewFromEnv(ctx context.Context, cfg *Config) (*DB, error) {
-	db, err := vit.Open("localhost:15991", "@primary")
-
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse connection string: %w", err)
+	if cfg == nil {
+		return nil, fmt.Errorf("database: configuration is required")
 	}
-
-	//ping vitess
-	if err := db.Ping(); err != nil {
-		return nil, fmt.Errorf("failed to ping vitess: %w", err)
-	}
-	// Set the connection pool settings.
-
-	return &DB{Pool: db}, nil
+	return OpenVitess(ctx, VitessConfig{Address: cfg.VTGateAddress, Target: cfg.VTGateTarget})
 }
 
 // Close releases database connections.

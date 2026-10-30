@@ -2,6 +2,33 @@
 
 Use this as a starting point for Go programs, CLI tools, Services, Daemons, Libraries, etc
 
+## SPIFFE mTLS, Envoy and local Vitess
+
+```shell
+./scripts/spiffe-up.sh
+./scripts/spiffe-smoke.sh
+```
+
+The separate `compose.spiffe.yaml` stack provides SPIRE-issued rotating identities,
+Envoy mTLS for A → B and B → Vitess, and a private local-development Vitess database.
+The default infrastructure/probe mode needs no OAuth credentials. Enable the `apps`
+profile with your external IdP configuration to run the unchanged JWT-protected Go
+applications. See [the SPIFFE/Envoy guide](docs/spiffe-envoy.md) for deployment,
+attestation privileges, isolation, tests and limitations.
+
+## Persistent Vitess order CRUD
+
+```shell
+./scripts/vitess-migrate.sh
+# After configuring your external IdP:
+docker compose -f compose.spiffe.yaml --profile apps up --build --wait
+```
+
+`/orders` now supports create, list, get, update and delete with real Vitess
+persistence through Envoy. JWT permissions precede every storage operation.
+See [the order/driver guide](docs/orders-vitess.md) for migrations, JSON contracts,
+pool settings, pagination and CRUD smoke tests.
+
 ## Service-to-service authentication with an external IdP
 
 ```shell
@@ -9,8 +36,9 @@ docker compose up --build --wait
 ./scripts/smoke.sh
 ```
 
-Configure your external OAuth provider using `.env.example` before starting
-Service A and Service B. The provider must issue supported signed JWT access
+Configure your external OAuth provider and a reachable VTGate gateway using
+`.env.example` before starting standalone Service A and Service B. The SPIFFE
+commands above provide the local gateway and migration job. The provider must issue supported signed JWT access
 tokens and publish HTTPS JWKS; no IdP or token signer runs in this repository.
 Tests use a test-only HTTPS fake issuer and need no external credentials.
 See [the complete authentication guide](docs/service-auth.md) for architecture,
@@ -56,114 +84,6 @@ SCYLLA_TEST_HOST=127.0.0.1:9042 SCYLLA_TEST_KEYSPACE=blueprint_test \
 - add otel - ebpf auto-instrumentation
 - add prom metrics - add otel metrics
 - nats
-- spiffe/spire
 
-## SPIFFE NOTES
-
-
-Register your gRPC services with SPIRE to get their identities (SPIFFE IDs). For example:
-
-
-```shell
-./spire-server entry create -spiffeID spiffe://example.org/serviceA -parentID spiffe://example.org/agent -selector unix:uid:1001
-./spire-server entry create -spiffeID spiffe://example.org/serviceB -parentID spiffe://example.org/agent -selector unix:uid:1002
-
-```
-
-
-server
-
-```go
-package main
-
-import (
-    "context"
-    "net"
-
-    "github.com/paveletto99/microservice-blueprint/pkg/logging"
-    "github.com/spiffe/go-spiffe/v2/spiffetls/tlsconfig"
-    "github.com/spiffe/go-spiffe/v2/workloadapi"
-    "google.golang.org/grpc"
-    "google.golang.org/grpc/credentials"
-)
-
-func main() {
-    logger := logging.DefaultLogger()
-    defer logger.Sync()
-    ctx := logging.WithLogger(context.Background(), logger)
-
-    // Create a Workload API client
-    client, err := workloadapi.New(ctx, workloadapi.WithAddr("unix:///tmp/spire-agent.sock"))
-    if err != nil {
-        logger.Fatalw("unable to create Workload API client", "error", err)
-    }
-    defer client.Close()
-
-    // Create TLS configuration
-    tlsConfig := tlsconfig.MTLSServerConfig(client, tlsconfig.AuthorizeAny())
-
-    // Create a new gRPC server with the TLS configuration
-    grpcServer := grpc.NewServer(grpc.Creds(credentials.NewTLS(tlsConfig)))
-
-    // Register your services here
-    // pb.RegisterYourServiceServer(grpcServer, &yourService{})
-
-    lis, err := net.Listen("tcp", ":50051")
-    if err != nil {
-        logger.Fatalw("failed to listen", "error", err)
-    }
-
-    logger.Info("starting gRPC server")
-    if err := grpcServer.Serve(lis); err != nil {
-        logger.Fatalw("failed to serve", "error", err)
-    }
-}
-
-
-```
-
-client
-
-```go
-
-package main
-
-import (
-    "context"
-
-    "github.com/paveletto99/microservice-blueprint/pkg/logging"
-    "github.com/spiffe/go-spiffe/v2/spiffetls/tlsconfig"
-    "github.com/spiffe/go-spiffe/v2/workloadapi"
-    "google.golang.org/grpc"
-    "google.golang.org/grpc/credentials"
-)
-
-func main() {
-    logger := logging.DefaultLogger()
-    defer logger.Sync()
-    ctx := logging.WithLogger(context.Background(), logger)
-
-    // Create a Workload API client
-    client, err := workloadapi.New(ctx, workloadapi.WithAddr("unix:///tmp/spire-agent.sock"))
-    if err != nil {
-        logger.Fatalw("unable to create Workload API client", "error", err)
-    }
-    defer client.Close()
-
-    // Create TLS configuration
-    tlsConfig := tlsconfig.MTLSClientConfig(client, tlsconfig.AuthorizeAny())
-
-    // Dial gRPC server with the TLS configuration
-    conn, err := grpc.Dial("localhost:50051", grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig)))
-    if err != nil {
-        logger.Fatalw("failed to dial server", "error", err)
-    }
-    defer conn.Close()
-
-    // Call your services here
-    // client := pb.NewYourServiceClient(conn)
-    // response, err := client.YourMethod(ctx, &pb.YourRequest{})
-}
-
-
-```
+The old incomplete SPIRE Docker scaffolding and direct-Go sketches have been
+replaced by the maintained Envoy/SPIRE stack described in [docs/spiffe-envoy.md](docs/spiffe-envoy.md).

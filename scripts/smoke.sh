@@ -15,6 +15,5 @@ status 200 GET http://127.0.0.1:8082/readyz
 status 200 GET http://127.0.0.1:8081/readyz
 status 401 GET http://127.0.0.1:8082/orders
 status 200 GET http://127.0.0.1:8081/call/orders
-status "${EXPECT_POST_STATUS:-201}" POST http://127.0.0.1:8081/call/orders
-status "${EXPECT_DELETE_STATUS:-403}" DELETE http://127.0.0.1:8081/call/orders/demo-1
-echo "External OAuth client credentials and authorization smoke checks passed."
+echo "External OAuth readiness and authenticated read smoke checks passed (no database rows mutated)."
+echo "For full CRUD with delete privileges: python3 scripts/orders-crud-smoke.py"

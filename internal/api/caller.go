@@ -30,8 +30,11 @@ func NewServiceAHandler(oauth *auth.OAuthClient, resourceURL string) http.Handle
 			return
 		}
 		path := "/orders"
-		if r.Method == http.MethodDelete {
-			path += "/" + url.PathEscape(r.PathValue("id"))
+		if id := r.PathValue("id"); id != "" {
+			path += "/" + url.PathEscape(id)
+		}
+		if r.URL.RawQuery != "" {
+			path += "?" + r.URL.RawQuery
 		}
 		req, err := http.NewRequestWithContext(r.Context(), r.Method, strings.TrimSuffix(resourceURL, "/")+path, bytes.NewReader(body))
 		if err != nil {
@@ -46,19 +49,24 @@ func NewServiceAHandler(oauth *auth.OAuthClient, resourceURL string) http.Handle
 			return
 		}
 		defer response.Body.Close() // Response is bounded and never contains access tokens.
-		data, err := io.ReadAll(io.LimitReader(response.Body, 64*1024+1))
-		if err != nil || len(data) > 64*1024 {
+		data, err := io.ReadAll(io.LimitReader(response.Body, 256*1024+1))
+		if err != nil || len(data) > 256*1024 {
 			http.Error(w, "invalid upstream response", 502)
 			return
 		}
 		w.Header().Set("Content-Type", response.Header.Get("Content-Type"))
+		if location := response.Header.Get("Location"); strings.HasPrefix(location, "/orders/") {
+			w.Header().Set("Location", "/call"+location)
+		}
 		w.WriteHeader(response.StatusCode)
 		if _, err := w.Write(data); err != nil {
 			logging.FromContext(r.Context()).Warn("upstream response could not be written")
 		}
 	}
 	mux.HandleFunc("GET /call/orders", call)
+	mux.HandleFunc("GET /call/orders/{id}", call)
 	mux.HandleFunc("POST /call/orders", call)
+	mux.HandleFunc("PUT /call/orders/{id}", call)
 	mux.HandleFunc("DELETE /call/orders/{id}", call)
 	return mux
 }

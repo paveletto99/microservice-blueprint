@@ -10,6 +10,8 @@ import (
 	"github.com/paveletto99/microservice-blueprint/internal/api"
 	"github.com/paveletto99/microservice-blueprint/internal/auth"
 	"github.com/paveletto99/microservice-blueprint/internal/demoruntime"
+	"github.com/paveletto99/microservice-blueprint/internal/orders"
+	"github.com/paveletto99/microservice-blueprint/pkg/database"
 )
 
 func main() { demoruntime.Main(realMain) }
@@ -21,6 +23,22 @@ func realMain(ctx context.Context) error {
 	}
 	if err := (auth.Policy{Clients: auth.Any(allowedClients...)}).Validate(); err != nil {
 		return err
+	}
+	dbConfig, err := database.VitessConfigFromEnv()
+	if err != nil {
+		return err
+	}
+	db, err := database.OpenVitess(ctx, dbConfig)
+	if err != nil {
+		return err
+	}
+	defer db.Close(ctx)
+	store, err := orders.NewRepository(db.Pool)
+	if err != nil {
+		return err
+	}
+	if err := store.Health(ctx); err != nil {
+		return errors.New("orders schema unavailable; run the migration job before starting Service B")
 	}
 	lifetime, err := demoruntime.Duration("JWT_MAX_LIFETIME", 10*time.Minute)
 	if err != nil {
@@ -35,7 +53,7 @@ func realMain(ctx context.Context) error {
 		return err
 	}
 	defer verifier.Close()
-	handler, err := api.NewServiceBHandler(verifier, allowedClients...)
+	handler, err := api.NewServiceBHandler(verifier, store, allowedClients...)
 	if err != nil {
 		return err
 	}

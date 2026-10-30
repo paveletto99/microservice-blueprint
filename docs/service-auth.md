@@ -20,7 +20,10 @@ positive numeric `expires_in` (at most 24 hours), and publish supported public k
    the application does not guess discovery paths or token-supplied URLs.
 3. Use `.env.example` as a configuration template. Its values are placeholders,
    not working credentials. Inject real credentials securely and never commit `.env`.
-4. Start the two applications:
+4. Configure a reachable VTGate gateway and apply the additive orders migration.
+   The SPIFFE stack handles its local gateway and migration job automatically;
+   standalone Compose needs an external `VTGATE_ADDRESS`. See [orders/Vitess](orders-vitess.md).
+5. Start the two applications:
 
 ```sh
 docker compose up --build --wait
@@ -148,30 +151,31 @@ are 403; denied requests never invoke the business handler.
 
 | Route | Scope | Roles | Success |
 | --- | --- | --- | --- |
-| GET /orders | ALL orders:read | ANY orders:reader, orders:admin | 200 |
+| GET /orders and GET /orders/{id} | ALL orders:read | ANY orders:reader, orders:admin | 200 / 404 |
 | POST /orders | ALL orders:write | ANY orders:writer, orders:admin | 201 |
+| PUT /orders/{id} | ALL orders:write | ANY orders:writer, orders:admin | 200 / 404 |
 | DELETE /orders/{id} | ALL orders:delete | ALL orders:admin, orders:delete | 204 |
 
 Every business route also requires a mapped client in `AUTH_ALLOWED_CLIENTS`.
 There is no role hierarchy: orders:admin alone cannot DELETE. Roles/grants are
-managed externally, never elevated by client requests. Business data is demo JSON,
-not persistent order storage. `/healthz`, `/readyz` and B's `/metrics` are public.
+managed externally, never elevated by client requests. Data now persists in Vitess;
+see the order guide for validation and pagination. `/healthz`, `/readyz` and B's
+`/metrics` are public; readiness also requires database/schema health.
 
 ```sh
 curl -i http://127.0.0.1:8082/orders               # 401 without authentication
 curl -i http://127.0.0.1:8081/call/orders          # 200 with configured read grants
-curl -i -X POST http://127.0.0.1:8081/call/orders
-curl -i -X DELETE http://127.0.0.1:8081/call/orders/demo-1
+curl -i -X POST http://127.0.0.1:8081/call/orders -H 'Content-Type: application/json' -d '{"item":"example"}'
+# Individual operations use the UUID returned by creation, not a fixed demo ID.
 curl -fsS http://127.0.0.1:8082/metrics
 ```
 
-Smoke assumes read/write grants and a DELETE denial. Override expected decisions
-for your external grants, without changing provider roles through this application:
+The basic smoke is read-only. Full persisted CRUD needs deliberate read/write/delete
+grants, without changing provider roles through this application:
 
 ```sh
-EXPECT_POST_STATUS=403 EXPECT_DELETE_STATUS=403 ./scripts/smoke.sh
-# If the provider grants both delete roles and scope:
-EXPECT_DELETE_STATUS=204 ./scripts/smoke.sh
+./scripts/smoke.sh
+ORDERS_CALL_URL=http://127.0.0.1:8081/call/orders python3 scripts/orders-crud-smoke.py
 ```
 
 ## Testing, packaging and limitations

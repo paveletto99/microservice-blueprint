@@ -12,3 +12,5 @@ tools/certs
 **/*.key
 **/*.pem
 **/*.zip
+**/__pycache__
+**/*.pyc

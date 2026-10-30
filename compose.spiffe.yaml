@@ -1,0 +1,317 @@
+name: service-auth-spiffe
+
+x-secure: &secure
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+
+x-envoy: &envoy
+  <<: *secure
+  build:
+    context: .
+    dockerfile: Dockerfile.spiffe-envoy
+  image: service-auth-spiffe-envoy:local
+  read_only: true
+  tmpfs: [/tmp]
+  networks: [mesh]
+  healthcheck:
+    test: [CMD, /usr/local/bin/healthcheck, --healthcheck, "http://127.0.0.1:9901/ready"]
+    interval: 2s
+    timeout: 3s
+    retries: 60
+  depends_on:
+    spire-agent:
+      condition: service_healthy
+
+services:
+  spire-volume-init:
+    <<: *secure
+    image: python:3.14-slim@sha256:cd89c30eda26ee911a4611b18680086e0ea42e6f5f8cbe653d07fa7958c9cec8
+    user: "0:0"
+    cap_add: [CHOWN, FOWNER, DAC_OVERRIDE]
+    read_only: true
+    network_mode: none
+    entrypoint: [python3, /init-volumes.py]
+    volumes:
+      - ./docker/spiffe/init-volumes.py:/init-volumes.py:ro
+      - spire-server-data:/server-data
+      - spire-server-api:/server-api
+  spire-server:
+    <<: *secure
+    image: ghcr.io/spiffe/spire-server:1.15.5@sha256:584a9c5cc95b9457f5033e7e4488d603fffe5ec48a80c4dba14b05c5e1c2c384
+    user: "1000:1000"
+    command: [-config, /config/server.conf, -socketPath, /run/spire/server/api.sock]
+    read_only: true
+    networks: [control]
+    volumes:
+      - ./docker/spiffe/server.conf:/config/server.conf:ro
+      - spire-server-data:/run/spire/data
+      - spire-server-api:/run/spire/server
+    depends_on:
+      spire-volume-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: [CMD, /opt/spire/bin/spire-server, healthcheck, -socketPath, /run/spire/server/api.sock]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+  spire-bootstrap:
+    <<: *secure
+    build:
+      context: .
+      dockerfile: Dockerfile.spiffe-bootstrap
+    read_only: true
+    user: "0:1000"
+    network_mode: none
+    volumes:
+      - spire-server-api:/run/spire/server
+      - spire-bootstrap:/run/spire/bootstrap
+    depends_on:
+      spire-server:
+        condition: service_healthy
+  spire-agent:
+    <<: *secure
+    image: ghcr.io/spiffe/spire-agent:1.15.5@sha256:3652c732b0f0d36f4dd78394230a1b1cd0ddcc29548a46c67a996b1a78c14481
+    user: "0:0"
+    pid: host
+    cgroup: host
+    cap_add: [SYS_PTRACE]
+    command: [-config, /config/agent.conf]
+    read_only: true
+    networks: [control]
+    volumes:
+      - ./docker/spiffe/agent.conf:/config/agent.conf:ro
+      - spire-bootstrap:/run/spire/bootstrap:ro
+      - spire-agent-data:/run/spire/data
+      - spire-agent-api:/run/spire/agent
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      spire-bootstrap:
+        condition: service_completed_successfully
+    healthcheck:
+      test: [CMD, /opt/spire/bin/spire-agent, healthcheck, -socketPath, /run/spire/agent/agent.sock]
+      interval: 2s
+      timeout: 3s
+      retries: 60
+  envoy-a:
+    <<: *envoy
+    user: "10001:10001"
+    command: [-c, /config/envoy.json, --concurrency, "2", --log-level, warn]
+    labels:
+      io.service-auth.workload: service-a
+      io.service-auth.deployment: spiffe-compose
+    ports: ["127.0.0.1:${SPIFFE_HTTP_PORT:-18081}:18080"]
+    volumes:
+      - ./docker/spiffe/envoy/service-a.json:/config/envoy.json:ro
+      - spire-agent-api:/run/spire/agent:ro
+  envoy-b:
+    <<: *envoy
+    user: "10002:10002"
+    command: [-c, /config/envoy.json, --concurrency, "2", --log-level, warn]
+    labels:
+      io.service-auth.workload: service-b
+      io.service-auth.deployment: spiffe-compose
+    volumes:
+      - ./docker/spiffe/envoy/service-b.json:/config/envoy.json:ro
+      - spire-agent-api:/run/spire/agent:ro
+  vitess:
+    <<: *secure
+    image: vitess/vttestserver:v24.0.5-mysql84@sha256:52e88e95533e74ae4cf50e710095ed052a133b945dd9780008a613536334fdc0
+    entrypoint: [/bin/sh, /config/vitess.sh]
+    networks: [database]
+    volumes:
+      - ./docker/spiffe/vitess.sh:/config/vitess.sh:ro
+      - vitess-data:/vt/vtdataroot
+    healthcheck:
+      test: [CMD, mysql, --protocol=TCP, --host=127.0.0.1, --port=15993, --user=root, --connect-timeout=3, --execute=SELECT 1]
+      interval: 3s
+      timeout: 5s
+      retries: 60
+      start_period: 10s
+  envoy-vitess:
+    <<: *envoy
+    user: "10003:10003"
+    networks: [mesh, database]
+    command: [-c, /config/envoy.json, --concurrency, "2", --log-level, warn]
+    labels:
+      io.service-auth.workload: vtgate
+      io.service-auth.deployment: spiffe-compose
+    volumes:
+      - ./docker/spiffe/envoy/vtgate.json:/config/envoy.json:ro
+      - spire-agent-api:/run/spire/agent:ro
+    depends_on:
+      spire-agent:
+        condition: service_healthy
+      vitess:
+        condition: service_healthy
+  # These applications are opt-in because their external OAuth/JWKS configuration is still required.
+  orders-migrate:
+    <<: *secure
+    profiles: [apps, migrations]
+    build:
+      context: .
+      dockerfile: Dockerfile.vitess-migrate
+    read_only: true
+    network_mode: service:envoy-b
+    environment:
+      VTGATE_ADDRESS: "127.0.0.1:15991"
+      VTGATE_TARGET: commerce@primary
+    depends_on:
+      envoy-b:
+        condition: service_healthy
+      envoy-vitess:
+        condition: service_healthy
+  service-b:
+    <<: *secure
+    profiles: [apps]
+    build:
+      context: .
+      dockerfile: Dockerfile.service-b
+    read_only: true
+    user: "65532:65532"
+    network_mode: service:envoy-b
+    environment:
+      LISTEN_ADDRESS: "127.0.0.1:8080"
+      OIDC_ISSUER: ${OIDC_ISSUER:-}
+      OIDC_JWKS_URL: ${OIDC_JWKS_URL:-}
+      OAUTH_AUDIENCE: ${OAUTH_AUDIENCE:-}
+      AUTH_ALLOWED_CLIENTS: ${AUTH_ALLOWED_CLIENTS:-}
+      JWT_TOKEN_TYPE: ${JWT_TOKEN_TYPE:-at+jwt}
+      JWT_CLIENT_ID_CLAIM: ${JWT_CLIENT_ID_CLAIM:-client_id}
+      JWT_SCOPE_CLAIM: ${JWT_SCOPE_CLAIM:-scope}
+      JWT_ROLES_CLAIM: ${JWT_ROLES_CLAIM:-roles}
+      JWT_TOKEN_USE_CLAIM: ${JWT_TOKEN_USE_CLAIM:-}
+      JWT_TOKEN_USE_VALUE: ${JWT_TOKEN_USE_VALUE:-}
+      JWT_MAX_LIFETIME: ${JWT_MAX_LIFETIME:-10m}
+      VTGATE_ADDRESS: "127.0.0.1:15991"
+      VTGATE_TARGET: commerce@primary
+      VTGATE_MAX_OPEN_CONNS: ${VTGATE_MAX_OPEN_CONNS:-10}
+      VTGATE_MAX_IDLE_CONNS: ${VTGATE_MAX_IDLE_CONNS:-5}
+    depends_on:
+      envoy-b:
+        condition: service_healthy
+      orders-migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: [CMD, /app, --healthcheck, "http://127.0.0.1:8080/readyz"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+  service-a:
+    <<: *secure
+    profiles: [apps]
+    build:
+      context: .
+      dockerfile: Dockerfile.service-a
+    read_only: true
+    user: "65532:65532"
+    network_mode: service:envoy-a
+    environment:
+      LISTEN_ADDRESS: "127.0.0.1:8080"
+      SERVICE_B_URL: "http://127.0.0.1:18000"
+      ALLOW_HTTP_RESOURCE: "true"
+      OIDC_TOKEN_URL: ${OIDC_TOKEN_URL:-}
+      OAUTH_CLIENT_ID: ${OAUTH_CLIENT_ID:-}
+      OAUTH_CLIENT_SECRET: ${OAUTH_CLIENT_SECRET:-}
+      OAUTH_AUTH_METHOD: ${OAUTH_AUTH_METHOD:-client_secret_basic}
+      OAUTH_SCOPES: ${OAUTH_SCOPES:-}
+      OAUTH_RESOURCE: ${OAUTH_RESOURCE:-}
+      OAUTH_RESOURCE_PARAMETER: ${OAUTH_RESOURCE_PARAMETER:-resource}
+    depends_on:
+      envoy-a:
+        condition: service_healthy
+      service-b:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, /app, --healthcheck, "http://127.0.0.1:8080/readyz"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+  envoy-unauthorized:
+    <<: *envoy
+    profiles: [tests]
+    user: "10004:10004"
+    command: [-c, /config/envoy.json, --concurrency, "2", --log-level, warn]
+    labels:
+      io.service-auth.workload: unauthorized
+      io.service-auth.deployment: spiffe-compose
+    volumes:
+      - ./docker/spiffe/envoy/unauthorized.json:/config/envoy.json:ro
+      - spire-agent-api:/run/spire/agent:ro
+  db-mysql-probe:
+    <<: *secure
+    profiles: [tests]
+    image: vitess/vttestserver:v24.0.5-mysql84@sha256:52e88e95533e74ae4cf50e710095ed052a133b945dd9780008a613536334fdc0
+    entrypoint: [mysql]
+    network_mode: service:envoy-b
+    command: [--protocol=TCP, --host=127.0.0.1, --port=15993, --user=root, --database=commerce, --connect-timeout=5, --batch, --skip-column-names, --execute=SELECT 1]
+  db-grpc-probe:
+    <<: *secure
+    profiles: [tests]
+    build:
+      context: .
+      dockerfile: Dockerfile.spiffe-db-probe
+      target: probe-runtime
+    network_mode: service:envoy-b
+  orders-crud-test:
+    <<: *secure
+    profiles: [tests]
+    build:
+      context: .
+      dockerfile: Dockerfile.spiffe-db-probe
+      target: crud-tests
+    network_mode: service:envoy-b
+    environment:
+      VTGATE_TEST_ADDRESS: "127.0.0.1:15991"
+      VTGATE_TEST_TARGET: commerce@primary
+  db-denied-probe:
+    <<: *secure
+    profiles: [tests]
+    image: vitess/vttestserver:v24.0.5-mysql84@sha256:52e88e95533e74ae4cf50e710095ed052a133b945dd9780008a613536334fdc0
+    entrypoint: [mysql]
+    network_mode: service:envoy-unauthorized
+    command: [--protocol=TCP, --host=127.0.0.1, --port=15993, --user=root, --connect-timeout=3, --execute=SELECT 1]
+  test-backend-b:
+    <<: *secure
+    profiles: [tests]
+    image: python:3.14-slim@sha256:cd89c30eda26ee911a4611b18680086e0ea42e6f5f8cbe653d07fa7958c9cec8
+    network_mode: service:envoy-b
+    user: "65532:65532"
+    read_only: true
+    entrypoint: [python3, /probe.py, backend]
+    volumes:
+      - ./docker/spiffe/probe.py:/probe.py:ro
+  probe-allowed:
+    <<: *secure
+    profiles: [tests]
+    image: python:3.14-slim@sha256:cd89c30eda26ee911a4611b18680086e0ea42e6f5f8cbe653d07fa7958c9cec8
+    network_mode: service:envoy-a
+    read_only: true
+    entrypoint: [python3, /probe.py]
+    command: [allowed]
+    volumes:
+      - ./docker/spiffe/probe.py:/probe.py:ro
+  probe-denied:
+    <<: *secure
+    profiles: [tests]
+    image: python:3.14-slim@sha256:cd89c30eda26ee911a4611b18680086e0ea42e6f5f8cbe653d07fa7958c9cec8
+    network_mode: service:envoy-unauthorized
+    read_only: true
+    entrypoint: [python3, /probe.py, denied]
+    environment:
+      VITESS_BACKEND_IP: ${VITESS_BACKEND_IP:-}
+    volumes:
+      - ./docker/spiffe/probe.py:/probe.py:ro
+
+networks:
+  mesh:
+  control:
+    internal: true
+  database:
+    internal: true
+volumes:
+  spire-server-data:
+  spire-server-api:
+  spire-bootstrap:
+  spire-agent-data:
+  spire-agent-api:
+  vitess-data:

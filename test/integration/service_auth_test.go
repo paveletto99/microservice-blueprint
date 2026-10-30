@@ -18,6 +18,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/paveletto99/microservice-blueprint/internal/api"
 	"github.com/paveletto99/microservice-blueprint/internal/auth"
+	"github.com/paveletto99/microservice-blueprint/internal/orders"
 )
 
 const fixtureSecret = "test-only-machine-client-secret"
@@ -32,11 +33,19 @@ type stack struct {
 	idp                   *fakeIDP
 	issuer, serviceB      *httptest.Server
 	verifier              *auth.Verifier
+	store                 *fakeOrderStore
 	clock                 *clock
 	tokenCalls, jwksCalls atomic.Int64
 }
 
 func newStack(t *testing.T, roles, scopes []string, clientID string) *stack {
+	store := newOrderStore()
+	s := newStackWithStore(t, roles, scopes, clientID, store)
+	s.store = store
+	return s
+}
+
+func newStackWithStore(t *testing.T, roles, scopes []string, clientID string, store orders.Store) *stack {
 	t.Helper()
 	s := &stack{clock: newClock()}
 	s.idp = newFakeIDP(t, s.clock, clientID, roles, scopes)
@@ -59,7 +68,7 @@ func newStack(t *testing.T, roles, scopes []string, clientID string) *stack {
 		t.Fatal(err)
 	}
 	t.Cleanup(s.verifier.Close)
-	resourceHandler, err := api.NewServiceBHandler(s.verifier, "service-a")
+	resourceHandler, err := api.NewServiceBHandler(s.verifier, store, "service-a")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,12 +105,19 @@ func (s *stack) token(t *testing.T, clientID string, scopes []string) string {
 
 func requestStatus(t *testing.T, client *http.Client, method, endpoint, token string) int {
 	t.Helper()
-	req, err := http.NewRequestWithContext(t.Context(), method, endpoint, nil)
+	var body io.Reader
+	if method == "POST" || method == "PUT" {
+		body = strings.NewReader(`{"item":"fixture"}`)
+	}
+	req, err := http.NewRequestWithContext(t.Context(), method, endpoint, body)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
 	}
 	response, err := client.Do(req)
 	if err != nil {
@@ -120,10 +136,11 @@ func TestServiceToServicePoliciesAndCaches(t *testing.T) {
 	t.Cleanup(oauth.Close)
 	serviceA := httptest.NewTLSServer(api.NewServiceAHandler(oauth, s.serviceB.URL))
 	defer serviceA.Close()
+	created := createOrderHTTP(t, serviceA.Client(), serviceA.URL+"/call/orders", "")
 	for _, tc := range []struct {
 		method, path string
 		status       int
-	}{{"GET", "/call/orders", 200}, {"POST", "/call/orders", 201}, {"DELETE", "/call/orders/demo-1", 204}} {
+	}{{"GET", "/call/orders", 200}, {"GET", "/call/orders/" + created, 200}, {"PUT", "/call/orders/" + created, 200}, {"DELETE", "/call/orders/" + created, 204}, {"GET", "/call/orders/" + created, 404}} {
 		if got := requestStatus(t, serviceA.Client(), tc.method, serviceA.URL+tc.path, ""); got != tc.status {
 			t.Fatalf("%s returned %d, want %d", tc.method, got, tc.status)
 		}
@@ -173,6 +190,9 @@ func TestAuthenticatedDenials(t *testing.T) {
 			if got := requestStatus(t, s.serviceB.Client(), tc.method, s.serviceB.URL+tc.path, token); got != 403 {
 				t.Fatalf("status = %d, want 403", got)
 			}
+			if s.store.dataCalls.Load() != 0 {
+				t.Fatal("authorization denial accessed the database")
+			}
 		})
 	}
 }
@@ -196,6 +216,9 @@ func TestAuthenticationHeaderFailures(t *testing.T) {
 		if response.StatusCode != 401 || response.Header.Get("WWW-Authenticate") == "" {
 			t.Fatalf("invalid authentication returned %d", response.StatusCode)
 		}
+	}
+	if s.store.dataCalls.Load() != 0 {
+		t.Fatal("authentication denial accessed the database")
 	}
 }
 

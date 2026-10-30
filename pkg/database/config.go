@@ -9,7 +9,9 @@ import (
 )
 
 type Config struct {
-	Secrets secrets.Config
+	Secrets       secrets.Config
+	VTGateAddress string `env:"VTGATE_ADDRESS" json:",omitempty"`
+	VTGateTarget  string `env:"VTGATE_TARGET" json:",omitempty"`
 
 	Name               string        `env:"DB_NAME" json:",omitempty"`
 	User               string        `env:"DB_USER" json:",omitempty"`

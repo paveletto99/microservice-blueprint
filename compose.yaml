@@ -8,6 +8,15 @@ x-runtime: &runtime
   restart: on-failure
 
 services:
+  orders-migrate:
+    <<: *runtime
+    build:
+      context: .
+      dockerfile: Dockerfile.vitess-migrate
+    environment:
+      VTGATE_ADDRESS: ${VTGATE_ADDRESS:-127.0.0.1:15991}
+      VTGATE_TARGET: ${VTGATE_TARGET:-commerce@primary}
+    restart: "no"
   service-b:
     <<: *runtime
     build:
@@ -25,6 +34,13 @@ services:
       JWT_TOKEN_USE_CLAIM: ${JWT_TOKEN_USE_CLAIM:-}
       JWT_TOKEN_USE_VALUE: ${JWT_TOKEN_USE_VALUE:-}
       JWT_MAX_LIFETIME: ${JWT_MAX_LIFETIME:-10m}
+      VTGATE_ADDRESS: ${VTGATE_ADDRESS:-127.0.0.1:15991}
+      VTGATE_TARGET: ${VTGATE_TARGET:-commerce@primary}
+      VTGATE_MAX_OPEN_CONNS: ${VTGATE_MAX_OPEN_CONNS:-10}
+      VTGATE_MAX_IDLE_CONNS: ${VTGATE_MAX_IDLE_CONNS:-5}
+    depends_on:
+      orders-migrate:
+        condition: service_completed_successfully
     ports: ["127.0.0.1:8082:8080"]
     healthcheck:
       test: [CMD, /app, --healthcheck, "http://127.0.0.1:8080/readyz"]

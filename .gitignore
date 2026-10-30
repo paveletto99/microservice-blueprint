@@ -7,3 +7,5 @@ release
 /.env
 /dist/
 /bin/
+__pycache__/
+*.pyc
