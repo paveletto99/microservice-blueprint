@@ -32,6 +32,7 @@ import (
 	"context"
 	"expvar"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -40,6 +41,7 @@ import (
 	"github.com/spf13/pflag"
 
 	"vitess.io/vitess/go/vt/log"
+	"vitess.io/vitess/go/vt/utils"
 )
 
 var (
@@ -55,12 +57,12 @@ var (
 var CommonTags []string
 
 func RegisterFlags(fs *pflag.FlagSet) {
-	fs.BoolVar(&emitStats, "emit_stats", emitStats, "If set, emit stats to push-based monitoring and stats backends")
-	fs.DurationVar(&statsEmitPeriod, "stats_emit_period", statsEmitPeriod, "Interval between emitting stats to all registered backends")
-	fs.StringVar(&statsBackend, "stats_backend", statsBackend, "The name of the registered push-based monitoring/stats backend to use")
-	fs.StringVar(&combineDimensions, "stats_combine_dimensions", combineDimensions, `List of dimensions to be combined into a single "all" value in exported stats vars`)
-	fs.StringVar(&dropVariables, "stats_drop_variables", dropVariables, `Variables to be dropped from the list of exported variables.`)
-	fs.StringSliceVar(&CommonTags, "stats_common_tags", CommonTags, `Comma-separated list of common tags for the stats backend. It provides both label and values. Example: label1:value1,label2:value2`)
+	utils.SetFlagBoolVar(fs, &emitStats, "emit-stats", emitStats, "If set, emit stats to push-based monitoring and stats backends")
+	utils.SetFlagDurationVar(fs, &statsEmitPeriod, "stats-emit-period", statsEmitPeriod, "Interval between emitting stats to all registered backends")
+	utils.SetFlagStringVar(fs, &statsBackend, "stats-backend", statsBackend, "The name of the registered push-based monitoring/stats backend to use")
+	utils.SetFlagStringVar(fs, &combineDimensions, "stats-combine-dimensions", combineDimensions, `List of dimensions to be combined into a single "all" value in exported stats vars`)
+	utils.SetFlagStringVar(fs, &dropVariables, "stats-drop-variables", dropVariables, `Variables to be dropped from the list of exported variables.`)
+	utils.SetFlagStringSliceVar(fs, &CommonTags, "stats-common-tags", CommonTags, `Comma-separated list of common tags for the stats backend. It provides both label and values. Example: label1:value1,label2:value2`)
 }
 
 // StatsAllStr is the consolidated name if a dimension gets combined.
@@ -207,9 +209,11 @@ type PushBackend interface {
 	PushOne(name string, v Variable) error
 }
 
-var pushBackends = make(map[string]PushBackend)
-var pushBackendsLock sync.Mutex
-var once sync.Once
+var (
+	pushBackends     = make(map[string]PushBackend)
+	pushBackendsLock sync.Mutex
+	once             sync.Once
+)
 
 func AwaitBackend(ctx context.Context) error {
 	if statsBackend == "" {
@@ -229,7 +233,8 @@ func RegisterPushBackend(name string, backend PushBackend) {
 	pushBackendsLock.Lock()
 	defer pushBackendsLock.Unlock()
 	if _, ok := pushBackends[name]; ok {
-		log.Fatalf("PushBackend %s already exists; can't register the same name multiple times", name)
+		log.Error(fmt.Sprintf("PushBackend %s already exists; can't register the same name multiple times", name))
+		os.Exit(1)
 	}
 	pushBackends[name] = backend
 	if name == statsBackend {
@@ -251,7 +256,7 @@ func emitToBackend(emitPeriod *time.Duration) {
 	for range ticker.C {
 		if err := pushAll(); err != nil {
 			// TODO(aaijazi): This might cause log spam...
-			log.Warningf("Pushing stats to backend %v failed: %v", statsBackend, err)
+			log.Warn(fmt.Sprintf("Pushing stats to backend %v failed: %v", statsBackend, err))
 		}
 	}
 }

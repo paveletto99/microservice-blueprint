@@ -4,3 +4,6 @@
 .ll
 pobo
 release
+/.env
+/dist/
+/bin/

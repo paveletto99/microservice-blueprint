@@ -49,6 +49,7 @@ import (
 	"vitess.io/vitess/go/vt/grpccommon"
 	"vitess.io/vitess/go/vt/log"
 	"vitess.io/vitess/go/vt/logutil"
+	"vitess.io/vitess/go/vt/utils"
 	"vitess.io/vitess/go/vt/vterrors"
 
 	// Include deprecation warnings for soon-to-be-unsupported flag invocations.
@@ -100,28 +101,28 @@ var timeouts = &TimeoutFlags{
 func RegisterFlags() {
 	OnParse(func(fs *pflag.FlagSet) {
 		fs.DurationVar(&timeouts.LameduckPeriod, "lameduck-period", timeouts.LameduckPeriod, "keep running at least this long after SIGTERM before stopping")
-		fs.DurationVar(&timeouts.OnTermTimeout, "onterm_timeout", timeouts.OnTermTimeout, "wait no more than this for OnTermSync handlers before stopping")
-		fs.DurationVar(&timeouts.OnCloseTimeout, "onclose_timeout", timeouts.OnCloseTimeout, "wait no more than this for OnClose handlers before stopping")
+		utils.SetFlagDurationVar(fs, &timeouts.OnTermTimeout, "onterm-timeout", timeouts.OnTermTimeout, "wait no more than this for OnTermSync handlers before stopping")
+		utils.SetFlagDurationVar(fs, &timeouts.OnCloseTimeout, "onclose-timeout", timeouts.OnCloseTimeout, "wait no more than this for OnClose handlers before stopping")
 		fs.BoolVar(&catchSigpipe, "catch-sigpipe", catchSigpipe, "catch and ignore SIGPIPE on stdout and stderr if specified")
 		fs.IntVar(&maxStackSize, "max-stack-size", maxStackSize, "configure the maximum stack size in bytes")
 		fs.IntVar(&tableRefreshInterval, "table-refresh-interval", tableRefreshInterval, "interval in milliseconds to refresh tables in status page with refreshRequired class")
 
 		// pid_file.go
-		fs.StringVar(&pidFile, "pid_file", pidFile, "If set, the process will write its pid to the named file, and delete it on graceful shutdown.")
+		utils.SetFlagStringVar(fs, &pidFile, "pid-file", pidFile, "If set, the process will write its pid to the named file, and delete it on graceful shutdown.")
 	})
 }
 
 func RegisterFlagsWithTimeouts(tf *TimeoutFlags) {
 	OnParse(func(fs *pflag.FlagSet) {
 		fs.DurationVar(&tf.LameduckPeriod, "lameduck-period", tf.LameduckPeriod, "keep running at least this long after SIGTERM before stopping")
-		fs.DurationVar(&tf.OnTermTimeout, "onterm_timeout", tf.OnTermTimeout, "wait no more than this for OnTermSync handlers before stopping")
-		fs.DurationVar(&tf.OnCloseTimeout, "onclose_timeout", tf.OnCloseTimeout, "wait no more than this for OnClose handlers before stopping")
+		utils.SetFlagDurationVar(fs, &tf.OnTermTimeout, "onterm-timeout", tf.OnTermTimeout, "wait no more than this for OnTermSync handlers before stopping")
+		utils.SetFlagDurationVar(fs, &tf.OnCloseTimeout, "onclose-timeout", tf.OnCloseTimeout, "wait no more than this for OnClose handlers before stopping")
 		fs.BoolVar(&catchSigpipe, "catch-sigpipe", catchSigpipe, "catch and ignore SIGPIPE on stdout and stderr if specified")
 		fs.IntVar(&maxStackSize, "max-stack-size", maxStackSize, "configure the maximum stack size in bytes")
 		fs.IntVar(&tableRefreshInterval, "table-refresh-interval", tableRefreshInterval, "interval in milliseconds to refresh tables in status page with refreshRequired class")
 
 		// pid_file.go
-		fs.StringVar(&pidFile, "pid_file", pidFile, "If set, the process will write its pid to the named file, and delete it on graceful shutdown.")
+		utils.SetFlagStringVar(fs, &pidFile, "pid-file", pidFile, "If set, the process will write its pid to the named file, and delete it on graceful shutdown.")
 
 		timeouts = tf
 	})
@@ -138,7 +139,8 @@ func populateListeningURL(port int32) {
 	if err != nil {
 		host, err = os.Hostname()
 		if err != nil {
-			log.Exitf("os.Hostname() failed: %v", err)
+			log.Error(fmt.Sprintf("os.Hostname() failed: %v", err))
+			os.Exit(1)
 		}
 	}
 	ListeningURL = url.URL{
@@ -169,7 +171,7 @@ func OnTerm(f func()) {
 // This allows the program to change its behavior during the lameduck period.
 //
 // All hooks are run in parallel, and the process will do its best to wait
-// (up to -onterm_timeout) for all of them to finish before dying.
+// (up to -onterm-timeout) for all of them to finish before dying.
 //
 // See also: OnTerm
 func OnTermSync(f func()) {
@@ -192,7 +194,7 @@ func fireOnCloseHooks(timeout time.Duration) bool {
 // fireHooksWithTimeout returns true iff all the hooks finish before the timeout.
 func fireHooksWithTimeout(timeout time.Duration, name string, hookFn func()) bool {
 	defer log.Flush()
-	log.Infof("Firing %s hooks and waiting up to %v for them", name, timeout)
+	log.Info(fmt.Sprintf("Firing %s hooks and waiting up to %v for them", name, timeout))
 
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
@@ -205,10 +207,10 @@ func fireHooksWithTimeout(timeout time.Duration, name string, hookFn func()) boo
 
 	select {
 	case <-done:
-		log.Infof("%s hooks finished", name)
+		log.Info(name + " hooks finished")
 		return true
 	case <-timer.C:
-		log.Infof("%s hooks timed out", name)
+		log.Info(name + " hooks timed out")
 		return false
 	}
 }
@@ -305,6 +307,11 @@ func ParseFlags(cmd string) {
 
 	_flag.Parse(fs)
 
+	if err := log.Init(fs); err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		os.Exit(1)
+	}
+
 	if version {
 		AppVersion.Print()
 		os.Exit(0)
@@ -313,7 +320,8 @@ func ParseFlags(cmd string) {
 	args := fs.Args()
 	if len(args) > 0 {
 		_flag.Usage()
-		log.Exitf("%s doesn't take any positional arguments, got '%s'", cmd, strings.Join(args, " "))
+		log.Error(fmt.Sprintf("%s doesn't take any positional arguments, got '%s'", cmd, strings.Join(args, " ")))
+		os.Exit(1)
 	}
 
 	loadViper(cmd)
@@ -362,6 +370,17 @@ func moveFlags(name string, fs *pflag.FlagSet) {
 	fs.AddGoFlag(flag.Lookup("log_dir"))
 	fs.AddGoFlag(flag.Lookup("vmodule"))
 
+	// glog is deprecated in favor of structured logging (--log-structured).
+	// These flags will be removed in v25.
+	const deprecationMsg = "glog and its flags have been deprecated, use the default structured logging instead (\"--log-structured\")"
+	_ = fs.MarkDeprecated("logtostderr", deprecationMsg)
+	_ = fs.MarkDeprecated("log_backtrace_at", deprecationMsg)
+	_ = fs.MarkDeprecated("alsologtostderr", deprecationMsg)
+	_ = fs.MarkDeprecated("stderrthreshold", deprecationMsg)
+	_ = fs.MarkDeprecated("log_dir", deprecationMsg)
+	_ = fs.MarkDeprecated("vmodule", deprecationMsg)
+	_ = fs.MarkDeprecated("v", deprecationMsg)
+
 	pflag.CommandLine = fs
 }
 
@@ -370,12 +389,17 @@ func moveFlags(name string, fs *pflag.FlagSet) {
 // functions.
 func CobraPreRunE(cmd *cobra.Command, args []string) error {
 	_flag.TrickGlog()
+
+	if err := log.Init(cmd.Flags()); err != nil {
+		return err
+	}
+
 	// Register logging on config file change.
 	ch := make(chan struct{})
 	viperutil.NotifyConfigReload(ch)
 	go func() {
 		for range ch {
-			log.Infof("Change in configuration - %v", viperdebug.AllSettings())
+			log.Info(fmt.Sprintf("Change in configuration - %v", viperdebug.AllSettings()))
 		}
 	}()
 
@@ -415,6 +439,11 @@ func ParseFlagsWithArgs(cmd string) []string {
 
 	_flag.Parse(fs)
 
+	if err := log.Init(fs); err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		os.Exit(1)
+	}
+
 	if version {
 		AppVersion.Print()
 		os.Exit(0)
@@ -422,7 +451,8 @@ func ParseFlagsWithArgs(cmd string) []string {
 
 	args := fs.Args()
 	if len(args) == 0 {
-		log.Exitf("%s expected at least one positional argument", cmd)
+		log.Error(cmd + " expected at least one positional argument")
+		os.Exit(1)
 	}
 
 	loadViper(cmd)
@@ -435,7 +465,8 @@ func ParseFlagsWithArgs(cmd string) []string {
 func loadViper(cmd string) {
 	watchCancel, err := viperutil.LoadConfig()
 	if err != nil {
-		log.Exitf("%s: failed to read in config: %s", cmd, err.Error())
+		log.Error(fmt.Sprintf("%s: failed to read in config: %s", cmd, err.Error()))
+		os.Exit(1)
 	}
 	OnTerm(watchCancel)
 	debugConfigRegisterOnce.Do(func() {

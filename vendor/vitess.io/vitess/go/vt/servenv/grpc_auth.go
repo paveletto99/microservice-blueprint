@@ -18,6 +18,8 @@ package servenv
 
 import (
 	"context"
+	"fmt"
+	"os"
 
 	"github.com/spf13/pflag"
 	"google.golang.org/grpc"
@@ -26,6 +28,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"vitess.io/vitess/go/vt/log"
+	"vitess.io/vitess/go/vt/utils"
 )
 
 var grpcAuthServerFlagHooks []func(*pflag.FlagSet)
@@ -37,7 +40,7 @@ var grpcAuthServerFlagHooks []func(*pflag.FlagSet)
 // ParseFlags(WithArgs)? if they wish to expose Authenticator functionality.
 func RegisterGRPCServerAuthFlags() {
 	OnParse(func(fs *pflag.FlagSet) {
-		fs.StringVar(&gRPCAuth, "grpc_auth_mode", gRPCAuth, "Which auth plugin implementation to use (eg: static)")
+		utils.SetFlagStringVar(fs, &gRPCAuth, "grpc-auth-mode", gRPCAuth, "Which auth plugin implementation to use (eg: static)")
 
 		for _, fn := range grpcAuthServerFlagHooks {
 			fn(fs)
@@ -45,7 +48,7 @@ func RegisterGRPCServerAuthFlags() {
 	})
 }
 
-// GRPCAuth returns the value of the `--grpc_auth_mode` flag.
+// GRPCAuth returns the value of the `--grpc-auth-mode` flag.
 func GRPCAuth() string {
 	return gRPCAuth
 }
@@ -62,16 +65,18 @@ var authPlugins = make(map[string]func() (Authenticator, error))
 // RegisterAuthPlugin registers an implementation of AuthServer.
 func RegisterAuthPlugin(name string, authPlugin func() (Authenticator, error)) {
 	if _, ok := authPlugins[name]; ok {
-		log.Fatalf("AuthPlugin named %v already exists", name)
+		log.Error(fmt.Sprintf("AuthPlugin named %v already exists", name))
+		os.Exit(1)
 	}
 	authPlugins[name] = authPlugin
 }
 
-// GetAuthenticator returns an AuthPlugin by name, or log.Fatalf.
+// GetAuthenticator returns an AuthPlugin by name, or exits the process.
 func GetAuthenticator(name string) func() (Authenticator, error) {
 	authPlugin, ok := authPlugins[name]
 	if !ok {
-		log.Fatalf("no AuthPlugin name %v registered", name)
+		log.Error(fmt.Sprintf("no AuthPlugin name %v registered", name))
+		os.Exit(1)
 	}
 	return authPlugin
 }

@@ -9,7 +9,7 @@ import (
 	"github.com/quic-go/quic-go"
 )
 
-var _ quic.Stream = &stateTrackingStream{}
+const streamDatagramQueueLen = 32
 
 // stateTrackingStream is an implementation of quic.Stream that delegates
 // to an underlying stream
@@ -19,52 +19,49 @@ var _ quic.Stream = &stateTrackingStream{}
 // parent connection, this is done through the streamClearer interface when
 // both the send and receive sides are closed
 type stateTrackingStream struct {
-	quic.Stream
+	*quic.Stream
 
-	mx      sync.Mutex
-	sendErr error
-	recvErr error
+	sendDatagram func([]byte) error
+	hasData      chan struct{}
+	queue        [][]byte // TODO: use a ring buffer
+
+	mx             sync.Mutex
+	sendStreamDone bool
+	recvErr        error
 
 	clearer streamClearer
-	setter  errorSetter
 }
+
+var _ datagramStream = &stateTrackingStream{}
 
 type streamClearer interface {
 	clearStream(quic.StreamID)
 }
 
-type errorSetter interface {
-	SetSendError(error)
-	SetReceiveError(error)
-}
-
-func newStateTrackingStream(s quic.Stream, clearer streamClearer, setter errorSetter) *stateTrackingStream {
+func newStateTrackingStream(s *quic.Stream, clearer streamClearer, sendDatagram func([]byte) error) *stateTrackingStream {
 	t := &stateTrackingStream{
-		Stream:  s,
-		clearer: clearer,
-		setter:  setter,
+		Stream:       s,
+		clearer:      clearer,
+		sendDatagram: sendDatagram,
+		hasData:      make(chan struct{}, 1),
 	}
 
-	context.AfterFunc(s.Context(), func() {
-		t.closeSend(context.Cause(s.Context()))
-	})
+	context.AfterFunc(s.Context(), t.closeSend)
 
 	return t
 }
 
-func (s *stateTrackingStream) closeSend(e error) {
+func (s *stateTrackingStream) closeSend() {
 	s.mx.Lock()
 	defer s.mx.Unlock()
 
 	// clear the stream the first time both the send
 	// and receive are finished
-	if s.sendErr == nil {
+	if !s.sendStreamDone {
 		if s.recvErr != nil {
 			s.clearer.clearStream(s.StreamID())
 		}
-
-		s.setter.SetSendError(e)
-		s.sendErr = e
+		s.sendStreamDone = true
 	}
 }
 
@@ -75,35 +72,42 @@ func (s *stateTrackingStream) closeReceive(e error) {
 	// clear the stream the first time both the send
 	// and receive are finished
 	if s.recvErr == nil {
-		if s.sendErr != nil {
+		if s.sendStreamDone {
 			s.clearer.clearStream(s.StreamID())
 		}
-
-		s.setter.SetReceiveError(e)
 		s.recvErr = e
+		s.signalHasDatagram()
 	}
 }
 
 func (s *stateTrackingStream) Close() error {
-	s.closeSend(errors.New("write on closed stream"))
+	s.closeSend()
 	return s.Stream.Close()
 }
 
 func (s *stateTrackingStream) CancelWrite(e quic.StreamErrorCode) {
-	s.closeSend(&quic.StreamError{StreamID: s.Stream.StreamID(), ErrorCode: e})
+	s.closeSend()
 	s.Stream.CancelWrite(e)
 }
 
 func (s *stateTrackingStream) Write(b []byte) (int, error) {
 	n, err := s.Stream.Write(b)
 	if err != nil && !errors.Is(err, os.ErrDeadlineExceeded) {
-		s.closeSend(err)
+		s.closeSend()
 	}
 	return n, err
 }
 
+func (s *stateTrackingStream) TryWriteAll(b []byte) error {
+	err := s.Stream.TryWriteAll(b)
+	if err != nil && !errors.Is(err, quic.ErrWouldBlock) {
+		s.closeSend()
+	}
+	return err
+}
+
 func (s *stateTrackingStream) CancelRead(e quic.StreamErrorCode) {
-	s.closeReceive(&quic.StreamError{StreamID: s.Stream.StreamID(), ErrorCode: e})
+	s.closeReceive(&quic.StreamError{StreamID: s.StreamID(), ErrorCode: e})
 	s.Stream.CancelRead(e)
 }
 
@@ -113,4 +117,62 @@ func (s *stateTrackingStream) Read(b []byte) (int, error) {
 		s.closeReceive(err)
 	}
 	return n, err
+}
+
+func (s *stateTrackingStream) SendDatagram(b []byte) error {
+	if err := context.Cause(s.Context()); err != nil {
+		return err
+	}
+	return s.sendDatagram(b)
+}
+
+func (s *stateTrackingStream) signalHasDatagram() {
+	select {
+	case s.hasData <- struct{}{}:
+	default:
+	}
+}
+
+func (s *stateTrackingStream) enqueueDatagram(data []byte) {
+	s.mx.Lock()
+	defer s.mx.Unlock()
+
+	if s.recvErr != nil {
+		return
+	}
+	if len(s.queue) >= streamDatagramQueueLen {
+		return
+	}
+	s.queue = append(s.queue, data)
+	s.signalHasDatagram()
+}
+
+func (s *stateTrackingStream) ReceiveDatagram(ctx context.Context) ([]byte, error) {
+	if err := context.Cause(ctx); err != nil {
+		return nil, err
+	}
+start:
+	s.mx.Lock()
+	if len(s.queue) > 0 {
+		data := s.queue[0]
+		s.queue = s.queue[1:]
+		s.mx.Unlock()
+		return data, nil
+	}
+	if receiveErr := s.recvErr; receiveErr != nil {
+		s.mx.Unlock()
+		return nil, receiveErr
+	}
+	s.mx.Unlock()
+
+	select {
+	case <-ctx.Done():
+		return nil, context.Cause(ctx)
+	case <-s.hasData:
+	}
+	goto start
+}
+
+func (s *stateTrackingStream) QUICStream() *quic.Stream {
+	return s.Stream
 }

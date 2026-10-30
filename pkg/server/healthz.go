@@ -2,12 +2,12 @@ package server
 
 import (
 	"fmt"
-	"log/slog"
 	"net/http"
 	"time"
 
 	"github.com/paveletto99/microservice-blueprint/pkg/cache"
 	"github.com/paveletto99/microservice-blueprint/pkg/database"
+	"github.com/paveletto99/microservice-blueprint/pkg/logging"
 )
 
 func HandleHealthz(db *database.DB) http.Handler {
@@ -19,13 +19,13 @@ func HandleHealthz(db *database.DB) http.Handler {
 		result, _ := cacher.WriteThruLookup("healthz", func() (bool, error) {
 			conn, err := db.Pool.Conn(ctx)
 			if err != nil {
-				slog.Error("failed to acquire database connection", "error", err)
+				logging.FromContext(ctx).Errorw("failed to acquire database connection", "error", err)
 				return false, nil
 			}
 			defer conn.Close()
 
 			if err := conn.PingContext(ctx); err != nil {
-				slog.Error("failed to ping database", "error", err)
+				logging.FromContext(ctx).Errorw("failed to ping database", "error", err)
 				return false, nil
 			}
 

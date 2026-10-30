@@ -96,12 +96,15 @@ import (
 	"github.com/spf13/pflag"
 
 	vtrpcpb "vitess.io/vitess/go/vt/proto/vtrpc"
+	"vitess.io/vitess/go/vt/utils"
 )
 
 // logErrStacks controls whether printing errors includes the
 // embedded stack trace in the output.
-var logErrStacks bool
-var muLogErrStacks sync.Mutex
+var (
+	logErrStacks   bool
+	muLogErrStacks sync.Mutex
+)
 
 func getLogErrStacks() bool {
 	muLogErrStacks.Lock()
@@ -120,7 +123,7 @@ func setLogErrStacks(val bool) {
 func RegisterFlags(fs *pflag.FlagSet) {
 	muLogErrStacks.Lock()
 	defer muLogErrStacks.Unlock()
-	fs.BoolVar(&logErrStacks, "log_err_stacks", false, "log stack traces for errors")
+	utils.SetFlagBoolVar(fs, &logErrStacks, "log-err-stacks", false, "log stack traces for errors")
 }
 
 // New returns an error with the supplied message.

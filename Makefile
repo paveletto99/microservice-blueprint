@@ -79,19 +79,20 @@ ko-del:
 .PHONY: ko-del
 
 local-repo:
-	docker run -d --net=kind --restart=always -p "$(local_docker_repo):5000" --name "kind-registry" registry:2
+	docker run -d --net=kind --restart=always -p "$(local_docker_repo):5000" --name "kind-registry" registry:3.1.2
 .PHONY: local-repo
 
 update-deps:
-	go get -u
+	go get -u -t ./...
 	go mod tidy
+	go mod vendor
 .PHONY: update-deps
 
 # protoc generates the protos
 protoc:
-	@go install golang.org/x/tools/cmd/goimports@v0.1.12
-	@go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.2.0
-	@go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.28.1
+	@go install golang.org/x/tools/cmd/goimports@v0.52.0
+	@go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.2
+	@go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.12
 	@protoc --proto_path=. --go_out=paths=source_relative:. --go-grpc_out=paths=source_relative:. ./internal/pb/payment/*.proto
 	@goimports -w internal/pb
 .PHONY: protoc

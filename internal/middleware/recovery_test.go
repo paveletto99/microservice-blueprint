@@ -7,12 +7,46 @@ import (
 	"testing"
 
 	"github.com/paveletto99/microservice-blueprint/internal/middleware"
+	"github.com/paveletto99/microservice-blueprint/pkg/logging"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 // TestContext returns a context with test values pre-populated.
 func testContext(tb testing.TB) context.Context {
 	ctx := context.Background()
 	return ctx
+}
+
+func TestRecoveryUsesContextLogger(t *testing.T) {
+	t.Parallel()
+
+	core, logs := observer.New(zapcore.DebugLevel)
+	logger := zap.New(core).Sugar().With("request_id", "recovery-test")
+	ctx := logging.WithLogger(t.Context(), logger)
+	req := httptest.NewRequestWithContext(ctx, http.MethodGet, "/", nil)
+	response := httptest.NewRecorder()
+
+	middleware.Recovery()(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		panic("oops")
+	})).ServeHTTP(response, req)
+
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusInternalServerError)
+	}
+	entries := logs.All()
+	if len(entries) != 1 {
+		t.Fatalf("logged %d entries, want 1", len(entries))
+	}
+	entry := entries[0]
+	if entry.Level != zapcore.ErrorLevel || entry.Message != "http handler panic" {
+		t.Fatalf("unexpected panic log: %v", entry.Entry)
+	}
+	fields := entry.ContextMap()
+	if fields["panic"] != "oops" || fields["request_id"] != "recovery-test" {
+		t.Errorf("panic log lost structured context: %v", fields)
+	}
 }
 
 func TestRecovery(t *testing.T) {

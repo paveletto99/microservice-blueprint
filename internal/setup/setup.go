@@ -3,10 +3,10 @@ package setup
 import (
 	"context"
 	"fmt"
-	"log/slog"
 
 	"github.com/paveletto99/microservice-blueprint/internal/serverenv"
 	"github.com/paveletto99/microservice-blueprint/pkg/database"
+	"github.com/paveletto99/microservice-blueprint/pkg/logging"
 	"github.com/sethvargo/go-envconfig"
 )
 
@@ -44,11 +44,12 @@ func SetupWith(ctx context.Context, config interface{}, l envconfig.Lookuper) (*
 	if err := envconfig.ProcessWith(ctx, c); err != nil {
 		return nil, fmt.Errorf("error loading environment variables: %w", err)
 	}
-	slog.Info("provided", "config", config)
+	logger := logging.FromContext(ctx)
+	logger.Info("loaded service configuration")
 
 	// Setup the database connection.
 	if provider, ok := config.(DatabaseConfigProvider); ok {
-		slog.Info("configuring database")
+		logger.Info("configuring database")
 
 		dbConfig := provider.DatabaseConfig()
 		db, err := database.NewFromEnv(ctx, dbConfig)
@@ -59,7 +60,7 @@ func SetupWith(ctx context.Context, config interface{}, l envconfig.Lookuper) (*
 		// Update serverEnv setup.
 		serverEnvOpts = append(serverEnvOpts, serverenv.WithDatabase(db))
 
-		slog.Info("database", "config", dbConfig)
+		logger.Info("configured database")
 	}
 
 	return serverenv.New(ctx, serverEnvOpts...), nil

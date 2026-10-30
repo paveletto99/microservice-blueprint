@@ -31,7 +31,7 @@ func NewClient(ctx context.Context, config *Config, env *serverenv.ServerEnv) (*
 	opts = append(opts, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	conn, err := grpc.NewClient("http:/localhost:8080", opts...)
 	if err != nil {
-		logging.Info(ctx, "It is fine, this is not a complete example.")
+		logging.FromContext(ctx).Warnw("example payment client connection failed", "error", err)
 	}
 
 	defer conn.Close()
@@ -39,7 +39,7 @@ func NewClient(ctx context.Context, config *Config, env *serverenv.ServerEnv) (*
 	paymentClient := p.NewPaymentClient(conn)
 	_, err = paymentClient.Create(ctx, &p.CreatePaymentRequest{Price: 23})
 	if err != nil {
-		logging.Info(ctx, "Don't worry, we don't expect to see it is working.")
+		logging.FromContext(ctx).Warnw("example payment request failed", "error", err)
 	}
 
 	return &Client{}, nil

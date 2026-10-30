@@ -2,10 +2,10 @@ package payment
 
 import (
 	"context"
-	"log/slog"
 
 	p "github.com/paveletto99/microservice-blueprint/internal/pb/payment"
 	"github.com/paveletto99/microservice-blueprint/internal/serverenv"
+	"github.com/paveletto99/microservice-blueprint/pkg/logging"
 )
 
 // Compile time assert that this server implements the required grpc interface.
@@ -42,7 +42,7 @@ func (s Server) Create(ctx context.Context, req *p.CreatePaymentRequest) (*p.Cre
 
 	// simulate error
 	if req.Price == 0.0 {
-		slog.Error("failed to fetch", "error")
+		logging.FromContext(ctx).Warn("payment price is zero")
 	}
 
 	response := p.CreatePaymentResponse{BillId: 0}

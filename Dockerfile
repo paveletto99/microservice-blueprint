@@ -1,6 +1,6 @@
 ARG VERSION="dev"
 
-FROM golang:1.24 AS build
+FROM golang:1.27.3 AS build
 
 # allow this step access to build arg
 ARG VERSION
@@ -19,7 +19,7 @@ RUN CGO_ENABLED=0 go build -ldflags="-s -w -X main.version=${VERSION} -X main.co
     -v -o /usr/local/bin/app ./...
 
 # Make a stage to run the app
-FROM gcr.io/distroless/base-debian12
+FROM gcr.io/distroless/base-debian13
 
 COPY --from=build /usr/local/bin/app /usr/local/bin/
 

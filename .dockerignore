@@ -1,0 +1,14 @@
+.git
+.agents
+.ssh
+.env
+.env.*
+!.env.example
+vendor
+dist
+release
+bin
+tools/certs
+**/*.key
+**/*.pem
+**/*.zip

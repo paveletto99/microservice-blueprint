@@ -8,7 +8,7 @@ import (
 	"github.com/quic-go/quic-go/quicvarint"
 )
 
-// Clone clones a Config
+// Clone clones a Config.
 func (c *Config) Clone() *Config {
 	copy := *c
 	return &copy
@@ -20,6 +20,13 @@ func (c *Config) handshakeTimeout() time.Duration {
 
 func (c *Config) maxRetryTokenAge() time.Duration {
 	return c.handshakeTimeout()
+}
+
+func (c *Config) initialPacketSize() protocol.ByteCount {
+	if c.InitialPacketSize == 0 {
+		return protocol.InitialPacketSize
+	}
+	return protocol.ByteCount(c.InitialPacketSize)
 }
 
 func validateConfig(config *Config) error {
@@ -56,6 +63,7 @@ func validateConfig(config *Config) error {
 
 // populateConfig populates fields in the quic.Config with their default values, if none are set
 // it may be called with nil
+// InitialPacketSize keeps zero to distinguish the default from an explicit packet-size floor.
 func populateConfig(config *Config) *Config {
 	if config == nil {
 		config = &Config{}
@@ -100,29 +108,25 @@ func populateConfig(config *Config) *Config {
 	} else if maxIncomingUniStreams < 0 {
 		maxIncomingUniStreams = 0
 	}
-	initialPacketSize := config.InitialPacketSize
-	if initialPacketSize == 0 {
-		initialPacketSize = protocol.InitialPacketSize
-	}
-
 	return &Config{
-		GetConfigForClient:             config.GetConfigForClient,
-		Versions:                       versions,
-		HandshakeIdleTimeout:           handshakeIdleTimeout,
-		MaxIdleTimeout:                 idleTimeout,
-		KeepAlivePeriod:                config.KeepAlivePeriod,
-		InitialStreamReceiveWindow:     initialStreamReceiveWindow,
-		MaxStreamReceiveWindow:         maxStreamReceiveWindow,
-		InitialConnectionReceiveWindow: initialConnectionReceiveWindow,
-		MaxConnectionReceiveWindow:     maxConnectionReceiveWindow,
-		AllowConnectionWindowIncrease:  config.AllowConnectionWindowIncrease,
-		MaxIncomingStreams:             maxIncomingStreams,
-		MaxIncomingUniStreams:          maxIncomingUniStreams,
-		TokenStore:                     config.TokenStore,
-		EnableDatagrams:                config.EnableDatagrams,
-		InitialPacketSize:              initialPacketSize,
-		DisablePathMTUDiscovery:        config.DisablePathMTUDiscovery,
-		Allow0RTT:                      config.Allow0RTT,
-		Tracer:                         config.Tracer,
+		GetConfigForClient:               config.GetConfigForClient,
+		Versions:                         versions,
+		HandshakeIdleTimeout:             handshakeIdleTimeout,
+		MaxIdleTimeout:                   idleTimeout,
+		KeepAlivePeriod:                  config.KeepAlivePeriod,
+		InitialStreamReceiveWindow:       initialStreamReceiveWindow,
+		MaxStreamReceiveWindow:           maxStreamReceiveWindow,
+		InitialConnectionReceiveWindow:   initialConnectionReceiveWindow,
+		MaxConnectionReceiveWindow:       maxConnectionReceiveWindow,
+		AllowConnectionWindowIncrease:    config.AllowConnectionWindowIncrease,
+		MaxIncomingStreams:               maxIncomingStreams,
+		MaxIncomingUniStreams:            maxIncomingUniStreams,
+		TokenStore:                       config.TokenStore,
+		EnableDatagrams:                  config.EnableDatagrams,
+		InitialPacketSize:                config.InitialPacketSize,
+		DisablePathMTUDiscovery:          config.DisablePathMTUDiscovery,
+		EnableStreamResetPartialDelivery: config.EnableStreamResetPartialDelivery,
+		Allow0RTT:                        config.Allow0RTT,
+		Tracer:                           config.Tracer,
 	}
 }

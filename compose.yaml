@@ -1,0 +1,57 @@
+name: service-auth
+
+x-runtime: &runtime
+  read_only: true
+  user: "65532:65532"
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  restart: on-failure
+
+services:
+  service-b:
+    <<: *runtime
+    build:
+      context: .
+      dockerfile: Dockerfile.service-b
+    environment:
+      OIDC_ISSUER: ${OIDC_ISSUER:?Set the external HTTPS issuer}
+      OIDC_JWKS_URL: ${OIDC_JWKS_URL:?Set the external HTTPS JWKS URL}
+      OAUTH_AUDIENCE: ${OAUTH_AUDIENCE:?Set the resource audience}
+      AUTH_ALLOWED_CLIENTS: ${AUTH_ALLOWED_CLIENTS:?Set the client allowlist}
+      JWT_TOKEN_TYPE: ${JWT_TOKEN_TYPE:-at+jwt}
+      JWT_CLIENT_ID_CLAIM: ${JWT_CLIENT_ID_CLAIM:-client_id}
+      JWT_SCOPE_CLAIM: ${JWT_SCOPE_CLAIM:-scope}
+      JWT_ROLES_CLAIM: ${JWT_ROLES_CLAIM:-roles}
+      JWT_TOKEN_USE_CLAIM: ${JWT_TOKEN_USE_CLAIM:-}
+      JWT_TOKEN_USE_VALUE: ${JWT_TOKEN_USE_VALUE:-}
+      JWT_MAX_LIFETIME: ${JWT_MAX_LIFETIME:-10m}
+    ports: ["127.0.0.1:8082:8080"]
+    healthcheck:
+      test: [CMD, /app, --healthcheck, "http://127.0.0.1:8080/readyz"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+  service-a:
+    <<: *runtime
+    build:
+      context: .
+      dockerfile: Dockerfile.service-a
+    environment:
+      OIDC_TOKEN_URL: ${OIDC_TOKEN_URL:?Set the external HTTPS token URL}
+      SERVICE_B_URL: ${SERVICE_B_URL:-http://service-b:8080}
+      ALLOW_HTTP_RESOURCE: ${ALLOW_HTTP_RESOURCE:-true}
+      OAUTH_CLIENT_ID: ${OAUTH_CLIENT_ID:?Set the registered client ID}
+      OAUTH_CLIENT_SECRET: ${OAUTH_CLIENT_SECRET:?Inject the client secret}
+      OAUTH_AUTH_METHOD: ${OAUTH_AUTH_METHOD:-client_secret_basic}
+      OAUTH_SCOPES: ${OAUTH_SCOPES:-}
+      OAUTH_RESOURCE: ${OAUTH_RESOURCE:-}
+      OAUTH_RESOURCE_PARAMETER: ${OAUTH_RESOURCE_PARAMETER:-resource}
+    ports: ["127.0.0.1:8081:8080"]
+    depends_on:
+      service-b:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, /app, --healthcheck, "http://127.0.0.1:8080/readyz"]
+      interval: 2s
+      timeout: 3s
+      retries: 30

@@ -2,8 +2,10 @@ coverage:
   round: nearest
   ignore:
     - http3/gzip_reader.go
+    - example/
     - interop/
     - internal/handshake/cipher_suite.go
+    - internal/mocks/
     - internal/utils/linkedlist/linkedlist.go
     - internal/testdata
     - testutils/
@@ -14,3 +16,8 @@ coverage:
       default:
         threshold: 0.5
     patch: false
+flags:
+  clusterfuzz-lite-batch:
+    joined: false
+  clusterfuzz:
+    joined: false

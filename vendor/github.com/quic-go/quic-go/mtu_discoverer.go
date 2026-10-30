@@ -1,28 +1,19 @@
 package quic
 
 import (
-	"time"
-
 	"github.com/quic-go/quic-go/internal/ackhandler"
+	"github.com/quic-go/quic-go/internal/monotime"
 	"github.com/quic-go/quic-go/internal/protocol"
 	"github.com/quic-go/quic-go/internal/utils"
 	"github.com/quic-go/quic-go/internal/wire"
-	"github.com/quic-go/quic-go/logging"
+	"github.com/quic-go/quic-go/qlog"
+	"github.com/quic-go/quic-go/qlogwriter"
 )
-
-type mtuDiscoverer interface {
-	// Start starts the MTU discovery process.
-	// It's unnecessary to call ShouldSendProbe before that.
-	Start()
-	ShouldSendProbe(now time.Time) bool
-	CurrentSize() protocol.ByteCount
-	GetPing() (ping ackhandler.Frame, datagramSize protocol.ByteCount)
-}
 
 const (
 	// At some point, we have to stop searching for a higher MTU.
 	// We're happy to send a packet that's 10 bytes smaller than the actual MTU.
-	maxMTUDiff = 20
+	maxMTUDiff protocol.ByteCount = 20
 	// send a probe packet every mtuProbeDelay RTTs
 	mtuProbeDelay = 5
 	// Once maxLostMTUProbes MTU probe packets larger than a certain size are lost,
@@ -87,38 +78,41 @@ const (
 // MTU discovery concludes once the interval min and max has been narrowed down to maxMTUDiff.
 
 type mtuFinder struct {
-	lastProbeTime time.Time
-	mtuIncreased  func(protocol.ByteCount)
+	lastProbeTime monotime.Time
 
 	rttStats *utils.RTTStats
 
 	inFlight protocol.ByteCount // the size of the probe packet currently in flight. InvalidByteCount if none is in flight
 	min      protocol.ByteCount
-	limit    protocol.ByteCount
 
 	// on initialization, we treat the maximum size as the first "lost" packet
 	lost             [maxLostMTUProbes]protocol.ByteCount
 	lastProbeWasLost bool
 
-	tracer *logging.ConnectionTracer
-}
+	// The generation is used to ignore ACKs / losses for probe packets sent before a reset.
+	// Resets happen when the connection is migrated to a new path.
+	// We're therefore not concerned about overflows of this counter.
+	generation uint8
 
-var _ mtuDiscoverer = &mtuFinder{}
+	qlogger qlogwriter.Recorder
+}
 
 func newMTUDiscoverer(
 	rttStats *utils.RTTStats,
 	start, max protocol.ByteCount,
-	mtuIncreased func(protocol.ByteCount),
-	tracer *logging.ConnectionTracer,
+	qlogger qlogwriter.Recorder,
 ) *mtuFinder {
 	f := &mtuFinder{
-		inFlight:     protocol.InvalidByteCount,
-		min:          start,
-		limit:        max,
-		rttStats:     rttStats,
-		mtuIncreased: mtuIncreased,
-		tracer:       tracer,
+		inFlight: protocol.InvalidByteCount,
+		rttStats: rttStats,
+		qlogger:  qlogger,
 	}
+	f.init(start, max)
+	return f
+}
+
+func (f *mtuFinder) init(start, max protocol.ByteCount) {
+	f.min = start
 	for i := range f.lost {
 		if i == 0 {
 			f.lost[i] = max
@@ -126,7 +120,6 @@ func newMTUDiscoverer(
 		}
 		f.lost[i] = protocol.InvalidByteCount
 	}
-	return f
 }
 
 func (f *mtuFinder) done() bool {
@@ -142,11 +135,11 @@ func (f *mtuFinder) max() protocol.ByteCount {
 	return f.lost[len(f.lost)-1]
 }
 
-func (f *mtuFinder) Start() {
-	f.lastProbeTime = time.Now() // makes sure the first probe packet is not sent immediately
+func (f *mtuFinder) Start(now monotime.Time) {
+	f.lastProbeTime = now // makes sure the first probe packet is not sent immediately
 }
 
-func (f *mtuFinder) ShouldSendProbe(now time.Time) bool {
+func (f *mtuFinder) ShouldSendProbe(now monotime.Time) bool {
 	if f.lastProbeTime.IsZero() {
 		return false
 	}
@@ -156,18 +149,18 @@ func (f *mtuFinder) ShouldSendProbe(now time.Time) bool {
 	return !now.Before(f.lastProbeTime.Add(mtuProbeDelay * f.rttStats.SmoothedRTT()))
 }
 
-func (f *mtuFinder) GetPing() (ackhandler.Frame, protocol.ByteCount) {
+func (f *mtuFinder) GetPing(now monotime.Time) (ackhandler.Frame, protocol.ByteCount) {
 	var size protocol.ByteCount
 	if f.lastProbeWasLost {
 		size = (f.min + f.lost[0]) / 2
 	} else {
 		size = (f.min + f.max()) / 2
 	}
-	f.lastProbeTime = time.Now()
+	f.lastProbeTime = now
 	f.inFlight = size
 	return ackhandler.Frame{
 		Frame:   &wire.PingFrame{},
-		Handler: &mtuFinderAckHandler{f},
+		Handler: &mtuFinderAckHandler{mtuFinder: f, generation: f.generation},
 	}, size
 }
 
@@ -175,13 +168,26 @@ func (f *mtuFinder) CurrentSize() protocol.ByteCount {
 	return f.min
 }
 
+func (f *mtuFinder) Reset(start, max protocol.ByteCount) {
+	f.generation++
+	f.lastProbeTime = 0
+	f.lastProbeWasLost = false
+	f.inFlight = protocol.InvalidByteCount
+	f.init(start, max)
+}
+
 type mtuFinderAckHandler struct {
 	*mtuFinder
+	generation uint8
 }
 
 var _ ackhandler.FrameHandler = &mtuFinderAckHandler{}
 
 func (h *mtuFinderAckHandler) OnAcked(wire.Frame) {
+	if h.generation != h.mtuFinder.generation {
+		// ACK for probe sent before reset
+		return
+	}
 	size := h.inFlight
 	if size == protocol.InvalidByteCount {
 		panic("OnAcked callback called although there's no MTU probe packet in flight")
@@ -198,7 +204,7 @@ func (h *mtuFinderAckHandler) OnAcked(wire.Frame) {
 		}
 	}
 	if j > 0 {
-		for i := 0; i < len(h.lost); i++ {
+		for i := range len(h.lost) {
 			if i+j < len(h.lost) {
 				h.lost[i] = h.lost[i+j]
 			} else {
@@ -206,13 +212,19 @@ func (h *mtuFinderAckHandler) OnAcked(wire.Frame) {
 			}
 		}
 	}
-	if h.tracer != nil && h.tracer.UpdatedMTU != nil {
-		h.tracer.UpdatedMTU(size, h.done())
+	if h.qlogger != nil {
+		h.qlogger.RecordEvent(qlog.MTUUpdated{
+			Value: int(size),
+			Done:  h.done(),
+		})
 	}
-	h.mtuIncreased(size)
 }
 
 func (h *mtuFinderAckHandler) OnLost(wire.Frame) {
+	if h.generation != h.mtuFinder.generation {
+		// probe sent before reset received
+		return
+	}
 	size := h.inFlight
 	if size == protocol.InvalidByteCount {
 		panic("OnLost callback called although there's no MTU probe packet in flight")

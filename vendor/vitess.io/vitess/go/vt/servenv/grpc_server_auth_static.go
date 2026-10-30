@@ -18,7 +18,9 @@ package servenv
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 
@@ -28,6 +30,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"vitess.io/vitess/go/vt/log"
+	"vitess.io/vitess/go/vt/utils"
 )
 
 var (
@@ -45,7 +48,7 @@ const (
 )
 
 func registerGRPCServerAuthStaticFlags(fs *pflag.FlagSet) {
-	fs.StringVar(&credsFile, "grpc_auth_static_password_file", credsFile, "JSON File to read the users/passwords from.")
+	utils.SetFlagStringVar(fs, &credsFile, "grpc-auth-static-password-file", credsFile, "JSON File to read the users/passwords from.")
 }
 
 // StaticAuthConfigEntry is the container for server side credentials. Current implementation matches the
@@ -73,7 +76,7 @@ func (sa *StaticAuthPlugin) Authenticate(ctx context.Context, fullMethod string)
 		username := md["username"][0]
 		password := md["password"][0]
 		for _, authEntry := range sa.entries {
-			if username == authEntry.Username && password == authEntry.Password {
+			if username == authEntry.Username && subtle.ConstantTimeCompare([]byte(password), []byte(authEntry.Password)) == 1 {
 				return newStaticAuthContext(ctx, username), nil
 			}
 		}
@@ -98,7 +101,7 @@ func newStaticAuthContext(ctx context.Context, username string) context.Context 
 func staticAuthPluginInitializer() (Authenticator, error) {
 	entries := make([]StaticAuthConfigEntry, 0)
 	if credsFile == "" {
-		err := fmt.Errorf("failed to load static auth plugin. Plugin configured but grpc_auth_static_password_file not provided")
+		err := errors.New("failed to load static auth plugin. Plugin configured but grpc-auth-static-password-file not provided")
 		return nil, err
 	}
 
@@ -116,7 +119,7 @@ func staticAuthPluginInitializer() (Authenticator, error) {
 	staticAuthPlugin := &StaticAuthPlugin{
 		entries: entries,
 	}
-	log.Info("static auth plugin have initialized successfully with config from grpc_auth_static_password_file")
+	log.Info("static auth plugin have initialized successfully with config from grpc-auth-static-password-file")
 	return staticAuthPlugin, nil
 }
 

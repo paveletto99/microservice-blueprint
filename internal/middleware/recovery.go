@@ -1,8 +1,9 @@
 package middleware
 
 import (
-	"log/slog"
 	"net/http"
+
+	"github.com/paveletto99/microservice-blueprint/pkg/logging"
 )
 
 // Recovery recovers from panics and other fatal errors. It keeps the server and
@@ -13,13 +14,12 @@ func Recovery() Middleware {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			defer func() {
 				if p := recover(); p != nil {
-					slog.Error("http handler panic", "panic", p)
+					logging.FromContext(r.Context()).Errorw("http handler panic", "panic", p)
 					w.WriteHeader(http.StatusInternalServerError)
 					return
 				}
 			}()
 			next.ServeHTTP(w, r)
-			return
 		})
 	}
 }

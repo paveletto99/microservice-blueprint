@@ -21,7 +21,9 @@ package grpcclient
 import (
 	"context"
 	"crypto/tls"
+	"fmt"
 	"net"
+	"os"
 	"sync"
 	"time"
 
@@ -38,6 +40,7 @@ import (
 	"vitess.io/vitess/go/vt/grpccommon"
 	"vitess.io/vitess/go/vt/log"
 	"vitess.io/vitess/go/vt/servenv"
+	"vitess.io/vitess/go/vt/utils"
 	"vitess.io/vitess/go/vt/vttls"
 )
 
@@ -71,17 +74,17 @@ var (
 )
 
 func RegisterFlags(fs *pflag.FlagSet) {
-	fs.DurationVar(&keepaliveTime, "grpc_keepalive_time", keepaliveTime, "After a duration of this time, if the client doesn't see any activity, it pings the server to see if the transport is still alive.")
-	fs.DurationVar(&keepaliveTimeout, "grpc_keepalive_timeout", keepaliveTimeout, "After having pinged for keepalive check, the client waits for a duration of Timeout and if no activity is seen even after that the connection is closed.")
-	fs.IntVar(&initialConnWindowSize, "grpc_initial_conn_window_size", initialConnWindowSize, "gRPC initial connection window size")
-	fs.IntVar(&initialWindowSize, "grpc_initial_window_size", initialWindowSize, "gRPC initial window size")
-	fs.StringVar(&compression, "grpc_compression", compression, "Which protocol to use for compressing gRPC. Default: nothing. Supported: snappy")
+	utils.SetFlagDurationVar(fs, &keepaliveTime, "grpc-keepalive-time", keepaliveTime, "After a duration of this time, if the client doesn't see any activity, it pings the server to see if the transport is still alive.")
+	utils.SetFlagDurationVar(fs, &keepaliveTimeout, "grpc-keepalive-timeout", keepaliveTimeout, "After having pinged for keepalive check, the client waits for a duration of Timeout and if no activity is seen even after that the connection is closed.")
+	utils.SetFlagIntVar(fs, &initialConnWindowSize, "grpc-initial-conn-window-size", initialConnWindowSize, "gRPC initial connection window size")
+	utils.SetFlagIntVar(fs, &initialWindowSize, "grpc-initial-window-size", initialWindowSize, "gRPC initial window size")
+	utils.SetFlagStringVar(fs, &compression, "grpc-compression", compression, "Which protocol to use for compressing gRPC. Default: nothing. Supported: snappy")
 
-	fs.StringVar(&credsFile, "grpc_auth_static_client_creds", credsFile, "When using grpc_static_auth in the server, this file provides the credentials to use to authenticate with server.")
+	utils.SetFlagStringVar(fs, &credsFile, "grpc-auth-static-client-creds", credsFile, "When using grpc_static_auth in the server, this file provides the credentials to use to authenticate with server.")
 }
 
 func RegisterDialConcurrencyFlags(fs *pflag.FlagSet) {
-	fs.Int64Var(&dialConcurrencyLimit, "grpc-dial-concurrency-limit", 1024, "Maximum concurrency of grpc dial operations. This should be less than the golang max thread limit of 10000.")
+	utils.SetFlagInt64Var(fs, &dialConcurrencyLimit, "grpc-dial-concurrency-limit", 1024, "Maximum concurrency of grpc dial operations. This should be less than the golang max thread limit of 10000.")
 }
 
 func init() {
@@ -151,14 +154,15 @@ func DialContext(ctx context.Context, target string, failFast FailFast, opts ...
 	for _, grpcDialOptionInitializer := range grpcDialOptions {
 		newopts, err = grpcDialOptionInitializer(newopts)
 		if err != nil {
-			log.Fatalf("There was an error initializing client grpc.DialOption: %v", err)
+			log.Error(fmt.Sprintf("There was an error initializing client grpc.DialOption: %v", err))
+			os.Exit(1)
 		}
 	}
 	grpcDialOptionsMu.Unlock()
 
 	newopts = append(newopts, interceptors()...)
 
-	return grpc.DialContext(ctx, target, newopts...) // nolint:staticcheck
+	return grpc.DialContext(ctx, target, newopts...) //nolint:staticcheck
 }
 
 func interceptors() []grpc.DialOption {
@@ -174,21 +178,27 @@ func interceptors() []grpc.DialOption {
 // given client connection. It is either using TLS, or Insecure if
 // nothing is set.
 func SecureDialOption(cert, key, ca, crl, name string) (grpc.DialOption, error) {
-	// No security options set, just return.
-	if (cert == "" || key == "") && ca == "" {
-		return grpc.WithTransportCredentials(insecure.NewCredentials()), nil
+	creds, err := secureCredentials(cert, key, ca, crl, name)
+	if err != nil {
+		return nil, err
 	}
+	return grpc.WithTransportCredentials(creds), nil
+}
 
-	// Load the config. At this point we know
-	// we want a strict config with verify identity.
+// secureCredentials returns the transport credentials of the given
+// client connection: TLS, with the identity of the server verified,
+// when a certificate, a CA, or a CRL is set, and none otherwise. A CRL
+// alone has the connection use TLS, against the system roots, rather
+// than connect in plaintext with the CRL silently ignored.
+func secureCredentials(cert, key, ca, crl, name string) (credentials.TransportCredentials, error) {
+	if (cert == "" || key == "") && ca == "" && crl == "" {
+		return insecure.NewCredentials(), nil
+	}
 	config, err := vttls.ClientConfig(vttls.VerifyIdentity, cert, key, ca, crl, name, tls.VersionTLS12)
 	if err != nil {
 		return nil, err
 	}
-
-	// Create the creds server options.
-	creds := credentials.NewTLS(config)
-	return grpc.WithTransportCredentials(creds), nil
+	return credentials.NewTLS(config), nil
 }
 
 var dialConcurrencyLimitOpt grpc.DialOption

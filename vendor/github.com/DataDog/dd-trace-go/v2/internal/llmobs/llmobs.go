@@ -1,0 +1,712 @@
+// Unless explicitly stated otherwise all files in this repository are licensed
+// under the Apache License Version 2.0.
+// This product includes software developed at Datadog (https://www.datadoghq.com/).
+// Copyright 2025 Datadog, Inc.
+
+package llmobs
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/binary"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"math"
+	"math/big"
+	"slices"
+	"strconv"
+	"sync"
+	"time"
+
+	"github.com/DataDog/dd-trace-go/v2/ddtrace/ext"
+	"github.com/DataDog/dd-trace-go/v2/internal"
+	internalconfig "github.com/DataDog/dd-trace-go/v2/internal/config"
+	"github.com/DataDog/dd-trace-go/v2/internal/llmobs/config"
+	"github.com/DataDog/dd-trace-go/v2/internal/llmobs/transport"
+	"github.com/DataDog/dd-trace-go/v2/internal/log"
+)
+
+var (
+	mu           sync.Mutex
+	activeLLMObs *LLMObs
+)
+
+var (
+	errLLMObsNotEnabled        = errors.New("LLMObs is not enabled. Ensure the tracer has been started with the option tracer.WithLLMObsEnabled(true) or set DD_LLMOBS_ENABLED=true")
+	errAgentlessRequiresAPIKey = errors.New("LLMOBs agentless mode requires a valid API key - set the DD_API_KEY env variable to configure one")
+	errMLAppRequired           = errors.New("ML App is required for sending LLM Observability data")
+	errAgentModeNotSupported   = errors.New("DD_LLMOBS_AGENTLESS_ENABLED has been configured to false but the agent is not available or does not support LLMObs")
+	errFinishedSpan            = errors.New("span is already finished")
+)
+
+const (
+	baggageKeyExperimentID           = "_ml_obs.experiment_id"
+	baggageKeyExperimentRunID        = "_ml_obs.experiment_run_id"
+	baggageKeyExperimentRunIteration = "_ml_obs.experiment_run_iteration"
+	baggageKeyExperimentProjectID    = "_ml_obs.experiment_project_id"
+)
+
+// SpanKind represents the type of an LLMObs span.
+type SpanKind = transport.SpanKind
+
+const (
+	// SpanKindExperiment represents an experiment span for testing and evaluation.
+	SpanKindExperiment SpanKind = transport.SpanKindExperiment
+	// SpanKindWorkflow represents a workflow span that orchestrates multiple operations.
+	SpanKindWorkflow SpanKind = transport.SpanKindWorkflow
+	// SpanKindLLM represents a span for Large Language Model operations.
+	SpanKindLLM SpanKind = transport.SpanKindLLM
+	// SpanKindEmbedding represents a span for embedding generation operations.
+	SpanKindEmbedding SpanKind = transport.SpanKindEmbedding
+	// SpanKindAgent represents a span for AI agent operations.
+	SpanKindAgent SpanKind = transport.SpanKindAgent
+	// SpanKindRetrieval represents a span for document retrieval operations.
+	SpanKindRetrieval SpanKind = transport.SpanKindRetrieval
+	// SpanKindTask represents a span for general task operations.
+	SpanKindTask SpanKind = transport.SpanKindTask
+	// SpanKindTool represents a span for tool usage operations.
+	SpanKindTool SpanKind = transport.SpanKindTool
+)
+
+const (
+	defaultFlushInterval = 2 * time.Second
+)
+
+const (
+	// SizeLimitEVPEvent is the EVP event size limit.
+	SizeLimitEVPEvent = 5_000_000
+
+	// evalMetricsEnvelopeSize is a conservative estimate of the fixed JSON overhead added by the
+	// transport.PushMetricsRequest wrapper that encloses buffered eval metrics when sent, i.e.
+	// {"data":{"type":"evaluation_metric","attributes":{"metrics":[...]}}}. The actual wrapper is
+	// ~65 bytes; we reserve more to keep the serialized body safely under SizeLimitEVPEvent even if
+	// the envelope grows. The per-metric array separator (",") is accounted for separately.
+	evalMetricsEnvelopeSize = 256
+)
+
+// See: https://docs.datadoghq.com/getting_started/site/#access-the-datadog-site
+var ddSitesNeedingAppSubdomain = []string{"datadoghq.com", "datadoghq.eu", "ddog-gov.com"}
+
+type llmobsContext struct {
+	// apply to all spans
+	metadata map[string]any
+	metrics  map[string]float64
+	tags     map[string]string
+	costTags []string
+
+	// agent specific
+	agentManifest string
+
+	// llm specific
+	modelName       string
+	modelProvider   string
+	prompt          *Prompt
+	toolDefinitions []ToolDefinition
+
+	// input
+	inputDocuments []EmbeddedDocument
+	inputMessages  []LLMMessage
+	inputText      string
+
+	// output
+	outputDocuments []RetrievedDocument
+	outputMessages  []LLMMessage
+	outputText      string
+
+	// tool specific
+	intent      string
+	toolVersion string
+
+	// experiment specific
+	experimentInput          any
+	experimentExpectedOutput any
+	experimentOutput         any
+}
+
+// LLMObs represents the main LLMObs instance that handles span collection and transport.
+type LLMObs struct {
+	// Config contains the LLMObs configuration.
+	Config *config.Config
+	// Transport handles sending data to the Datadog backend.
+	Transport *transport.Transport
+	// Tracer is the underlying APM tracer.
+	Tracer Tracer
+
+	// channels used by producers
+	spanEventsCh  chan *transport.LLMObsSpanEvent
+	evalMetricsCh chan *transport.LLMObsMetric
+
+	// runtime buffers, payloads are accumulated here and flushed periodically
+	bufSpanEvents      []*transport.LLMObsSpanEvent
+	bufSpanEventsSize  int // cumulative JSON size of buffered span events
+	bufEvalMetrics     []*transport.LLMObsMetric
+	bufEvalMetricsSize int // cumulative JSON size of buffered eval metrics
+
+	// lifecycle
+	mu            sync.Mutex
+	running       bool
+	wg            sync.WaitGroup // tracks in-flight async batchSend goroutines only (not the main loop)
+	stopCh        chan struct{}  // signal stop
+	stoppedCh     chan struct{}  // closed when the main run loop exits
+	flushNowCh    chan struct{}
+	flushSyncCh   chan chan struct{} // synchronous flush: send a done channel, blocks until flush completes
+	flushInterval time.Duration
+}
+
+func newLLMObs(cfg *config.Config, tracer Tracer) (*LLMObs, error) {
+	if cfg.TestBaseURL == "" && cfg.AgentlessEnabled && !internal.IsAPIKeyValid(cfg.TracerConfig.APIKey) {
+		return nil, errAgentlessRequiresAPIKey
+	}
+	if cfg.MLApp == "" {
+		return nil, errMLAppRequired
+	}
+	if cfg.TracerConfig.HTTPClient == nil {
+		cfg.TracerConfig.HTTPClient = cfg.DefaultHTTPClient()
+	}
+	return &LLMObs{
+		Config:        cfg,
+		Transport:     transport.New(cfg),
+		Tracer:        tracer,
+		spanEventsCh:  make(chan *transport.LLMObsSpanEvent),
+		evalMetricsCh: make(chan *transport.LLMObsMetric),
+		stopCh:        make(chan struct{}),
+		stoppedCh:     make(chan struct{}),
+		flushNowCh:    make(chan struct{}, 1),
+		flushSyncCh:   make(chan chan struct{}),
+		flushInterval: defaultFlushInterval,
+	}, nil
+}
+
+// ResolveAgentlessEnabled resolves the tri-state agentless configuration
+// (nil = not explicitly set) against the agent's advertised LLMObs support.
+// Callers should invoke this before constructing a config.Config to pass
+// into Start.
+func ResolveAgentlessEnabled(agentlessEnabled *bool, agentSupportsLLMObs bool) (bool, error) {
+	if !agentSupportsLLMObs {
+		log.Debug("llmobs: agent not available or does not support llmobs")
+	}
+	if agentlessEnabled != nil {
+		if !*agentlessEnabled && !agentSupportsLLMObs {
+			return false, errAgentModeNotSupported
+		}
+		return *agentlessEnabled, nil
+	}
+	resolved := !agentSupportsLLMObs
+	if resolved {
+		log.Debug("llmobs: DD_LLMOBS_AGENTLESS_ENABLED not set, defaulting to agentless mode")
+	} else {
+		log.Debug("llmobs: DD_LLMOBS_AGENTLESS_ENABLED not set, defaulting to agent mode")
+	}
+	return resolved, nil
+}
+
+// Start starts the global LLMObs instance with the given configuration and tracer.
+// Returns an error if LLMObs is already running or if configuration is invalid.
+func Start(cfg config.Config, tracer Tracer, startErr error) (err error) {
+	internalconfig.RecordProductStart(internalconfig.ProductLLMObs)
+
+	startTime := time.Now()
+	defer func() {
+		trackLLMObsStart(startTime, err, cfg)
+	}()
+	mu.Lock()
+	defer mu.Unlock()
+	if activeLLMObs != nil {
+		activeLLMObs.Stop()
+	}
+	if startErr != nil {
+		return startErr
+	}
+	if !cfg.Enabled {
+		return nil
+	}
+	l, err := newLLMObs(&cfg, tracer)
+	if err != nil {
+		return err
+	}
+	activeLLMObs = l
+	activeLLMObs.Run()
+	return nil
+}
+
+// Stop stops the active LLMObs instance and cleans up resources.
+func Stop() {
+	mu.Lock()
+	defer mu.Unlock()
+
+	if activeLLMObs != nil {
+		activeLLMObs.Stop()
+		activeLLMObs = nil
+	}
+}
+
+// ActiveLLMObs returns the current active LLMObs instance, or an error if LLMObs is not enabled or started.
+func ActiveLLMObs() (*LLMObs, error) {
+	if activeLLMObs == nil || !activeLLMObs.Config.Enabled {
+		return nil, errLLMObsNotEnabled
+	}
+	return activeLLMObs, nil
+}
+
+// Flush forces a flush of all buffered LLMObs data to the transport.
+func Flush() {
+	if activeLLMObs != nil {
+		activeLLMObs.Flush()
+		trackUserFlush()
+	}
+}
+
+// FlushSync flushes all buffered LLMObs data and blocks until the send completes.
+func FlushSync() {
+	if activeLLMObs != nil {
+		activeLLMObs.FlushSync()
+	}
+}
+
+// Run starts the worker loop that processes span events and metrics.
+func (l *LLMObs) Run() {
+	l.mu.Lock()
+	if l.running {
+		l.mu.Unlock()
+		return
+	}
+	l.running = true
+	l.mu.Unlock()
+
+	go func() {
+		// this goroutine should be the only one writing to the internal buffers
+		defer close(l.stoppedCh)
+
+		ticker := time.NewTicker(l.flushInterval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case ev := <-l.spanEventsCh:
+				evSize := jsonSize(ev)
+				if l.bufSpanEventsSize+evSize > SizeLimitEVPEvent {
+					log.Debug("llmobs: span events buffer size limit reached, flushing before adding new event")
+					l.sendAsync(l.clearBuffersNonLocked())
+				}
+				l.bufSpanEvents = append(l.bufSpanEvents, ev)
+				l.bufSpanEventsSize += evSize
+
+			case evalMetric := <-l.evalMetricsCh:
+				// +1 accounts for the "," array separator that joins this metric to the others in
+				// the request body; combined with evalMetricsEnvelopeSize it makes the buffered size
+				// reflect the actual serialized PushMetricsRequest body rather than the bare metric.
+				mSize := jsonSize(evalMetric) + 1
+				if l.bufEvalMetricsSize+mSize+evalMetricsEnvelopeSize > SizeLimitEVPEvent {
+					log.Debug("llmobs: eval metrics buffer size limit reached, flushing before adding new metric")
+					l.sendAsync(l.clearBuffersNonLocked())
+				}
+				l.bufEvalMetrics = append(l.bufEvalMetrics, evalMetric)
+				l.bufEvalMetricsSize += mSize
+
+			case <-ticker.C:
+				l.sendAsync(l.clearBuffersNonLocked())
+
+			case <-l.flushNowCh:
+				log.Debug("llmobs: on-demand flush signal")
+				l.sendAsync(l.clearBuffersNonLocked())
+
+			case done := <-l.flushSyncCh:
+				log.Debug("llmobs: synchronous flush signal")
+				// wg tracks only async batchSend goroutines (not this main loop),
+				// so Wait() here cannot deadlock.
+				l.wg.Wait()
+				params := l.clearBuffersNonLocked()
+				l.batchSend(params)
+				close(done)
+
+			case <-l.stopCh:
+				log.Debug("llmobs: stop signal")
+				l.drainChannels()
+				params := l.clearBuffersNonLocked()
+				l.batchSend(params)
+				return
+			}
+		}
+	}()
+}
+
+// sendAsync dispatches params to batchSend in a new goroutine tracked by wg,
+// so FlushSync can wait for all in-flight sends via wg.Wait(). Must be called
+// only from the main Run worker goroutine.
+func (l *LLMObs) sendAsync(params batchSendParams) {
+	l.wg.Go(func() {
+		l.batchSend(params)
+	})
+}
+
+// clearBuffersNonLocked clears the internal buffers and returns the corresponding batchSendParams to send to the backend.
+// It is meant to be called only from the main Run worker goroutine.
+func (l *LLMObs) clearBuffersNonLocked() batchSendParams {
+	params := batchSendParams{
+		spanEvents:  l.bufSpanEvents,
+		evalMetrics: l.bufEvalMetrics,
+	}
+	l.bufSpanEvents = nil
+	l.bufSpanEventsSize = 0
+	l.bufEvalMetrics = nil
+	l.bufEvalMetricsSize = 0
+	return params
+}
+
+// Flush forces an immediate flush of anything currently buffered.
+// It does not wait for new items to arrive.
+func (l *LLMObs) Flush() {
+	// non-blocking edge trigger so multiple calls coalesce
+	select {
+	case l.flushNowCh <- struct{}{}:
+	default:
+	}
+}
+
+// FlushSync flushes all currently buffered data and blocks until the HTTP send completes.
+// If the instance has already been stopped, FlushSync returns immediately instead of
+// blocking forever on the unbuffered flushSyncCh send.
+func (l *LLMObs) FlushSync() {
+	done := make(chan struct{})
+	select {
+	case l.flushSyncCh <- done:
+		select {
+		case <-done:
+		case <-l.stopCh:
+		}
+	case <-l.stopCh:
+	}
+}
+
+// Stop requests shutdown, drains what’s already in the channels, flushes, and waits.
+func (l *LLMObs) Stop() {
+	l.mu.Lock()
+	if !l.running {
+		l.mu.Unlock()
+		return
+	}
+	l.running = false
+	l.mu.Unlock()
+
+	// Stop the sender/flush loop
+	select {
+	case <-l.stopCh:
+	default:
+		close(l.stopCh)
+	}
+
+	// Wait for the main loop to exit (it does a final synchronous flush before returning).
+	<-l.stoppedCh
+	// Wait for any async batchSend goroutines that were in flight when the loop stopped.
+	l.wg.Wait()
+}
+
+// drainChannels pulls everything currently buffered in the channels into our in-memory buffers.
+func (l *LLMObs) drainChannels() {
+	for {
+		progress := false
+		select {
+		case ev := <-l.spanEventsCh:
+			l.mu.Lock()
+			l.bufSpanEvents = append(l.bufSpanEvents, ev)
+			l.mu.Unlock()
+			progress = true
+		default:
+		}
+
+		select {
+		case evalMetric := <-l.evalMetricsCh:
+			l.mu.Lock()
+			l.bufEvalMetrics = append(l.bufEvalMetrics, evalMetric)
+			l.mu.Unlock()
+			progress = true
+		default:
+		}
+
+		if !progress {
+			return
+		}
+	}
+}
+
+type batchSendParams struct {
+	spanEvents  []*transport.LLMObsSpanEvent
+	evalMetrics []*transport.LLMObsMetric
+}
+
+// batchSend sends the buffered payloads to the backend.
+func (l *LLMObs) batchSend(params batchSendParams) {
+	if len(params.spanEvents) == 0 && len(params.evalMetrics) == 0 {
+		return
+	}
+
+	// Use an empty context so each retry in the transport gets its own
+	// fresh per-request timeout rather than all retries sharing a single deadline.
+	ctx := context.Background()
+
+	var wg sync.WaitGroup
+
+	if len(params.spanEvents) > 0 {
+		wg.Add(1)
+		events := params.spanEvents
+		go func() {
+			defer wg.Done()
+			log.Debug("llmobs: sending %d LLMObs Span Events", len(events))
+			if log.DebugEnabled() {
+				for _, ev := range events {
+					if b, err := json.Marshal(ev); err == nil {
+						log.Debug("llmobs: LLMObs Span Event: %s", b)
+					}
+				}
+			}
+			if err := l.Transport.PushSpanEvents(ctx, events); err != nil {
+				log.Error("llmobs: failed to push span events: %v", err.Error())
+				trackDroppedPayload(len(events), telemetryMetricDroppedSpanEvents, "transport_error")
+			} else {
+				log.Debug("llmobs: push span events success")
+			}
+		}()
+	}
+	if len(params.evalMetrics) > 0 {
+		wg.Add(1)
+		metrics := params.evalMetrics
+		go func() {
+			defer wg.Done()
+			log.Debug("llmobs: sending %d LLMObs Span Eval Metrics", len(metrics))
+			if log.DebugEnabled() {
+				for _, eval := range metrics {
+					if b, err := json.Marshal(eval); err == nil {
+						log.Debug("llmobs: LLMObs Span Eval Metric: %s", b)
+					}
+				}
+			}
+			if err := l.Transport.PushEvalMetrics(ctx, metrics); err != nil {
+				log.Error("llmobs: failed to push eval metrics: %v", err.Error())
+				trackDroppedPayload(len(metrics), telemetryMetricDroppedEvalEvents, "transport_error")
+			} else {
+				log.Debug("llmobs: push eval metrics success")
+			}
+		}()
+	}
+	wg.Wait()
+}
+
+// resolveParentAgent returns the nearest agent ancestor's (name, spanID) for a
+// span about to start, given its resolved parent and/or propagated parent.
+//
+// Resolution is O(1): the parent already resolved its own attribution when it
+// started, so a non-agent parent simply hands down what it inherited.
+//
+//	parent is an agent span            -> (parent.name, parent.SpanID())
+//	parent is any other kind           -> (parent.parentAgentName, parent.parentAgentSpanID)
+//	no local parent, propagated parent -> (propagated.ParentAgentName, propagated.ParentAgentSpanID)
+//	neither                            -> ("", "")
+func resolveParentAgent(parent *Span, propagated *PropagatedLLMSpan) (name string, spanID string) {
+	if parent != nil {
+		if parent.spanKind == SpanKindAgent {
+			return parent.name, parent.SpanID()
+		}
+		return parent.parentAgentName, parent.parentAgentSpanID
+	}
+	if propagated != nil {
+		return propagated.ParentAgentName, propagated.ParentAgentSpanID
+	}
+	return "", ""
+}
+
+// StartSpan starts a new LLMObs span with the given kind, name, and configuration.
+// Returns the created span and a context containing the span.
+func (l *LLMObs) StartSpan(ctx context.Context, kind SpanKind, name string, cfg StartSpanConfig) (*Span, context.Context) {
+	defer trackSpanStarted()
+
+	spanName := name
+	if spanName == "" {
+		spanName = string(kind)
+	}
+
+	if cfg.StartTime.IsZero() {
+		cfg.StartTime = time.Now()
+	}
+
+	startCfg := StartAPMSpanConfig{
+		SpanType:  ext.SpanTypeLLM,
+		StartTime: cfg.StartTime,
+	}
+	apmSpan, ctx := l.Tracer.StartSpan(ctx, spanName, startCfg)
+	span := &Span{
+		name:      spanName,
+		apm:       apmSpan,
+		startTime: cfg.StartTime,
+	}
+	if !l.Config.Enabled {
+		log.Warn("llmobs: LLMObs span was started without enabling LLMObs")
+		return span, ctx
+	}
+
+	if parent, ok := ActiveLLMSpanFromContext(ctx); ok {
+		log.Debug("llmobs: found active llm span in context: (trace_id: %q, span_id: %q, ml_app: %q)",
+			parent.TraceID(), parent.SpanID(), parent.MLApp())
+		span.parent = parent
+		span.llmTraceID = parent.llmTraceID
+	} else if propagated, ok := PropagatedLLMSpanFromContext(ctx); ok {
+		log.Debug("llmobs: found propagated llm span in context: (trace_id: %q, span_id: %q, ml_app: %q)",
+			propagated.TraceID, propagated.SpanID, propagated.MLApp)
+		span.propagated = propagated
+		span.llmTraceID = propagated.TraceID
+	} else {
+		span.llmTraceID = newLLMObsTraceID()
+	}
+
+	span.parentAgentName, span.parentAgentSpanID = resolveParentAgent(span.parent, span.propagated)
+
+	span.mlApp = cfg.MLApp
+	span.spanKind = kind
+	span.sessionID = cfg.SessionID
+	span.integration = cfg.Integration
+
+	span.llmCtx = llmobsContext{
+		modelName:     cfg.ModelName,
+		modelProvider: cfg.ModelProvider,
+	}
+
+	if kind == SpanKindTool {
+		if v := span.resolvedToolVersion(); v != "" {
+			span.llmCtx.toolVersion = v
+		}
+	}
+
+	if span.sessionID == "" {
+		span.sessionID = span.propagatedSessionID()
+	}
+	if span.mlApp == "" {
+		span.mlApp = span.propagatedMLApp()
+		if span.mlApp == "" {
+			// We should ensure there's always an ML App to fall back to during startup, so in theory this should never happen.
+			log.Warn("llmobs: ML App is required for sending LLM Observability data.")
+		}
+	}
+
+	experimentID := apmSpan.BaggageItem(baggageKeyExperimentID)
+	experimentRunID := apmSpan.BaggageItem(baggageKeyExperimentRunID)
+	experimentRunIteration := apmSpan.BaggageItem(baggageKeyExperimentRunIteration)
+	experimentProjectID := apmSpan.BaggageItem(baggageKeyExperimentProjectID)
+	if experimentID != "" || experimentRunID != "" || experimentRunIteration != "" || experimentProjectID != "" {
+		if span.llmCtx.tags == nil {
+			span.llmCtx.tags = make(map[string]string)
+		}
+		if experimentID != "" {
+			span.scope = "experiments"
+			span.llmCtx.tags["experiment_id"] = experimentID
+		}
+		if experimentRunID != "" {
+			span.llmCtx.tags["run_id"] = experimentRunID
+		}
+		if experimentRunIteration != "" {
+			span.llmCtx.tags["run_iteration"] = experimentRunIteration
+		}
+		if experimentProjectID != "" {
+			span.llmCtx.tags["project_id"] = experimentProjectID
+		}
+	}
+
+	log.Debug("llmobs: starting LLMObs span: %s, span_kind: %s, ml_app: %s", spanName, kind, span.mlApp)
+	return span, contextWithActiveLLMSpan(ctx, span)
+}
+
+// ExperimentInfo holds the experiment identifiers propagated via baggage to distributed child spans.
+type ExperimentInfo struct {
+	ID           string
+	RunID        string
+	RunIteration int
+	ProjectID    string
+}
+
+// StartExperimentSpan starts a new experiment span with the given name and configuration.
+// ExperimentInfo fields are propagated via baggage so distributed child spans inherit them.
+// Returns the created span and a context containing the span.
+func (l *LLMObs) StartExperimentSpan(ctx context.Context, name string, params ExperimentInfo, cfg StartSpanConfig) (*Span, context.Context) {
+	span, ctx := l.StartSpan(ctx, SpanKindExperiment, name, cfg)
+
+	if params.ID != "" {
+		span.apm.SetBaggageItem(baggageKeyExperimentID, params.ID)
+		span.scope = "experiments"
+	}
+	if params.RunID != "" {
+		span.apm.SetBaggageItem(baggageKeyExperimentRunID, params.RunID)
+	}
+	if params.RunIteration > 0 {
+		span.apm.SetBaggageItem(baggageKeyExperimentRunIteration, strconv.Itoa(params.RunIteration))
+	}
+	if params.ProjectID != "" {
+		span.apm.SetBaggageItem(baggageKeyExperimentProjectID, params.ProjectID)
+	}
+	return span, ctx
+}
+
+// PublicResourceBaseURL returns the base URL to access a resource (experiments, projects, etc.)
+func PublicResourceBaseURL() string {
+	site := "datadoghq.com"
+	if activeLLMObs != nil && activeLLMObs.Config.TracerConfig.Site != "" {
+		site = activeLLMObs.Config.TracerConfig.Site
+	}
+
+	baseURL := "https://"
+	if slices.Contains(ddSitesNeedingAppSubdomain, site) {
+		baseURL += "app."
+	}
+	baseURL += site
+	return baseURL
+}
+
+func newLLMObsTraceID() string {
+	var b [16]byte
+
+	// High 32 bits: Unix seconds
+	secs := uint32(time.Now().Unix())
+	binary.BigEndian.PutUint32(b[0:4], secs)
+
+	// Middle 32 bits: zero
+	// (already zeroed by array initialization)
+
+	// Low 64 bits: random
+	if _, err := rand.Read(b[8:16]); err != nil {
+		panic(err)
+	}
+
+	// Turn into a big.Int
+	x := new(big.Int).SetBytes(b[:])
+
+	// 32-byte hex string
+	return fmt.Sprintf("%032x", x)
+}
+
+// jsonSize returns the JSON-encoded byte size of v, or 0 if marshaling fails.
+func jsonSize(v any) int {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return 0
+	}
+	return len(b)
+}
+
+func readableBytes(s int) string {
+	const base = 1000
+	sizes := []string{"B", "kB", "MB", "GB", "TB", "PB", "EB"}
+
+	if s < 10 {
+		return fmt.Sprintf("%dB", s)
+	}
+	e := math.Floor(logn(float64(s), base))
+	suffix := sizes[int(e)]
+	val := math.Floor(float64(s)/math.Pow(base, e)*10+0.5) / 10
+	f := "%.0f%s"
+	if val < 10 {
+		f = "%.1f%s"
+	}
+	return fmt.Sprintf(f, val, suffix)
+}
+
+func logn(n, b float64) float64 {
+	return math.Log(n) / math.Log(b)
+}

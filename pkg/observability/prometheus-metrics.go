@@ -3,12 +3,12 @@ package observability
 import (
 	"errors"
 	"fmt"
-	"log/slog"
 	"net"
 	"net/http"
 	"os"
 	"time"
 
+	"github.com/paveletto99/microservice-blueprint/pkg/logging"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
@@ -61,8 +61,9 @@ func NewPrometheusMetricsFactory(config PrometheusConfig) (MetricsFactory, error
 	}
 
 	go func() {
-		slog.Debug("Listening for Prometheus scrapes", "host", config.Host, "port", config.Port)
-		slog.Error("Error serving Prometheus scrapes", "error", server.ListenAndServe())
+		logger := logging.DefaultLogger()
+		logger.Debugw("listening for Prometheus scrapes", "host", config.Host, "port", config.Port)
+		logger.Errorw("error serving Prometheus scrapes", "error", server.ListenAndServe())
 		os.Exit(1)
 	}()
 

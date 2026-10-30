@@ -1,73 +1,32 @@
 package logging
 
 import (
-	"log/slog"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
+	"go.uber.org/zap/zapcore"
 )
 
-func TestParseLevel(t *testing.T) {
-	for _, tc := range []struct {
-		name        string
-		lvl         string
-		parsedLevel slog.Level
-		hasErr      bool
-	}{
-		{
-			name:        "Empty string",
-			lvl:         "",
-			parsedLevel: 0,
-			hasErr:      true,
-		},
-		{
-			name:        "Uppercase level",
-			lvl:         "DEBUG",
-			parsedLevel: DebugLevel,
-			hasErr:      false,
-		},
-		{
-			name:        "Debug",
-			lvl:         "debug",
-			parsedLevel: DebugLevel,
-			hasErr:      false,
-		},
-		{
-			name:        "Info",
-			lvl:         "info",
-			parsedLevel: InfoLevel,
-			hasErr:      false,
-		},
-		{
-			name:        "Warn",
-			lvl:         "warn",
-			parsedLevel: WarnLevel,
-			hasErr:      false,
-		},
-		{
-			name:        "Error",
-			lvl:         "error",
-			parsedLevel: ErrorLevel,
-			hasErr:      false,
-		},
-		{
-			name:        "Unsupported level",
-			lvl:         "XXX",
-			parsedLevel: 0,
-			hasErr:      true,
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			l, err := ParseLevel(tc.lvl)
+func TestNewLoggerFromEnvDefaultsToInfo(t *testing.T) {
+	t.Setenv("LOG_LEVEL", "")
+	t.Setenv("LOG_MODE", "")
 
-			assert.Equal(t, tc.parsedLevel, l)
+	logger := NewLoggerFromEnv()
 
-			if tc.hasErr {
-				assert.NotNil(t, err)
-				assert.ErrorContains(t, err, "unrecognized level: ")
-			} else {
-				assert.Nil(t, err)
-			}
-		})
+	if !logger.Desugar().Core().Enabled(zapcore.InfoLevel) {
+		t.Fatal("expected default logger to enable info level")
+	}
+}
+
+func TestNewLoggerFromEnvHonorsExplicitLevel(t *testing.T) {
+	t.Setenv("LOG_LEVEL", "ERROR")
+	t.Setenv("LOG_MODE", "")
+
+	logger := NewLoggerFromEnv()
+
+	if logger.Desugar().Core().Enabled(zapcore.InfoLevel) {
+		t.Fatal("expected explicit ERROR level to disable info logs")
+	}
+	if !logger.Desugar().Core().Enabled(zapcore.ErrorLevel) {
+		t.Fatal("expected explicit ERROR level to enable error logs")
 	}
 }

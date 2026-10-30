@@ -5,10 +5,10 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"log/slog"
 	"strings"
 	"time"
 
+	"github.com/paveletto99/microservice-blueprint/pkg/logging"
 	vit "vitess.io/vitess/go/vt/vitessdriver"
 )
 
@@ -37,7 +37,7 @@ func NewFromEnv(ctx context.Context, cfg *Config) (*DB, error) {
 
 // Close releases database connections.
 func (db *DB) Close(ctx context.Context) {
-	slog.Info("Closing connection pool.")
+	logging.FromContext(ctx).Info("closing connection pool")
 	db.Pool.Close()
 }
 

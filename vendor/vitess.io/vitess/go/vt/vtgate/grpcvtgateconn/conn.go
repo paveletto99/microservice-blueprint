@@ -27,6 +27,7 @@ import (
 	"vitess.io/vitess/go/vt/callerid"
 	"vitess.io/vitess/go/vt/grpcclient"
 	"vitess.io/vitess/go/vt/servenv"
+	"vitess.io/vitess/go/vt/utils"
 	"vitess.io/vitess/go/vt/vterrors"
 	"vitess.io/vitess/go/vt/vtgate/vtgateconn"
 
@@ -38,11 +39,12 @@ import (
 )
 
 var (
-	cert string
-	key  string
-	ca   string
-	crl  string
-	name string
+	cert     string
+	key      string
+	ca       string
+	crl      string
+	name     string
+	failFast bool
 )
 
 func init() {
@@ -55,16 +57,17 @@ func init() {
 		"vtctl",
 		"vttestserver",
 	} {
-		servenv.OnParseFor(cmd, registerFlags)
+		servenv.OnParseFor(cmd, RegisterFlags)
 	}
 }
 
-func registerFlags(fs *pflag.FlagSet) {
-	fs.StringVar(&cert, "vtgate_grpc_cert", "", "the cert to use to connect")
-	fs.StringVar(&key, "vtgate_grpc_key", "", "the key to use to connect")
-	fs.StringVar(&ca, "vtgate_grpc_ca", "", "the server ca to use to validate servers when connecting")
-	fs.StringVar(&crl, "vtgate_grpc_crl", "", "the server crl to use to validate server certificates when connecting")
-	fs.StringVar(&name, "vtgate_grpc_server_name", "", "the server name to use to validate server certificate")
+func RegisterFlags(fs *pflag.FlagSet) {
+	utils.SetFlagStringVar(fs, &cert, "vtgate-grpc-cert", "", "the cert to use to connect")
+	utils.SetFlagStringVar(fs, &key, "vtgate-grpc-key", "", "the key to use to connect")
+	utils.SetFlagStringVar(fs, &ca, "vtgate-grpc-ca", "", "the server ca to use to validate servers when connecting")
+	utils.SetFlagStringVar(fs, &crl, "vtgate-grpc-crl", "", "the server crl to use to validate server certificates when connecting")
+	utils.SetFlagStringVar(fs, &name, "vtgate-grpc-server-name", "", "the server name to use to validate server certificate")
+	utils.SetFlagBoolVar(fs, &failFast, "vtgate-grpc-fail-fast", false, "whether to enable grpc fail fast when connecting")
 }
 
 type vtgateConn struct {
@@ -84,9 +87,14 @@ func Dial(opts ...grpc.DialOption) vtgateconn.DialerFunc {
 			return nil, err
 		}
 
-		opts = append(opts, opt)
+		// This dialer is shared and invoked concurrently for every new
+		// connection, so the captured opts must not be mutated: appending to
+		// it grows the slice on every dial and races between goroutines.
+		allOpts := make([]grpc.DialOption, 0, len(opts)+1)
+		allOpts = append(allOpts, opts...)
+		allOpts = append(allOpts, opt)
 
-		cc, err := grpcclient.DialContext(ctx, address, grpcclient.FailFast(false), opts...)
+		cc, err := grpcclient.DialContext(ctx, address, grpcclient.FailFast(failFast), allOpts...)
 		if err != nil {
 			return nil, err
 		}
@@ -238,6 +246,13 @@ func (a *streamExecuteMultiAdapter) Recv() (*sqltypes.Result, bool, error) {
 		// we reach here, only when it is the last packet.
 		// as in the last packet we receive the session and there is no result
 	}
+
+	// When a new result set starts, clear cached fields from the previous
+	// result set.
+	if newResult {
+		a.fields = nil
+	}
+
 	if err != nil {
 		return nil, newResult, err
 	}
@@ -316,8 +331,8 @@ func (a *vstreamAdapter) Recv() ([]*binlogdatapb.VEvent, error) {
 }
 
 func (conn *vtgateConn) VStream(ctx context.Context, tabletType topodatapb.TabletType, vgtid *binlogdatapb.VGtid,
-	filter *binlogdatapb.Filter, flags *vtgatepb.VStreamFlags) (vtgateconn.VStreamReader, error) {
-
+	filter *binlogdatapb.Filter, flags *vtgatepb.VStreamFlags,
+) (vtgateconn.VStreamReader, error) {
 	req := &vtgatepb.VStreamRequest{
 		CallerId:   callerid.EffectiveCallerIDFromContext(ctx),
 		TabletType: tabletType,
@@ -332,6 +347,37 @@ func (conn *vtgateConn) VStream(ctx context.Context, tabletType topodatapb.Table
 	return &vstreamAdapter{
 		stream: stream,
 	}, nil
+}
+
+type binlogDumpGTIDAdapter struct {
+	stream vtgateservicepb.Vitess_BinlogDumpGTIDClient
+}
+
+func (a *binlogDumpGTIDAdapter) Recv() (*vtgatepb.BinlogDumpResponse, error) {
+	r, err := a.stream.Recv()
+	if err != nil {
+		return nil, vterrors.FromGRPC(err)
+	}
+	return r, nil
+}
+
+func (conn *vtgateConn) BinlogDumpGTID(ctx context.Context, keyspace, shard string, tabletType topodatapb.TabletType, tabletAlias *topodatapb.TabletAlias, binlogFilename string, binlogPosition uint64, gtidSet string, flags uint32) (vtgateconn.BinlogDumpGTIDReader, error) {
+	req := &vtgatepb.BinlogDumpGTIDRequest{
+		CallerId:       callerid.EffectiveCallerIDFromContext(ctx),
+		Keyspace:       keyspace,
+		Shard:          shard,
+		TabletType:     tabletType,
+		TabletAlias:    tabletAlias,
+		BinlogFilename: binlogFilename,
+		BinlogPosition: binlogPosition,
+		GtidSet:        gtidSet,
+		Flags:          flags,
+	}
+	stream, err := conn.c.BinlogDumpGTID(ctx, req)
+	if err != nil {
+		return nil, vterrors.FromGRPC(err)
+	}
+	return &binlogDumpGTIDAdapter{stream: stream}, nil
 }
 
 func (conn *vtgateConn) Close() {

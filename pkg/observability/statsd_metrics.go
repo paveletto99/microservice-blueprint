@@ -2,7 +2,7 @@ package observability
 
 // import (
 // 	"fmt"
-// 	"log/slog"
+// 	"github.com/paveletto99/microservice-blueprint/pkg/logging"
 // 	"net"
 // 	"time"
 
@@ -22,7 +22,7 @@ package observability
 
 // 	err := s.client.TimeInMilliseconds(s.metricsName, float64(time.Since(s.startedAt).Milliseconds()), tags, 1)
 // 	if err != nil {
-// 		slog.Warn("Cannot send metrics to statsd", "error", err)
+// 		logging.DefaultLogger().Warnw("cannot send metrics to statsd", "error", err)
 // 	}
 // }
 

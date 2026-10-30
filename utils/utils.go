@@ -5,13 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"reflect"
 	"sort"
 	"strings"
 	"time"
 	"unicode"
 
+	"github.com/paveletto99/microservice-blueprint/pkg/logging"
 	"github.com/robfig/cron/v3"
 	"github.com/spf13/viper"
 )
@@ -129,7 +129,7 @@ func RemoveWhitespace(s string) string {
 
 func DeferAndLog(f func() error) {
 	if err := f(); err != nil {
-		slog.Warn("defer failed", "err", err)
+		logging.DefaultLogger().Warnw("defer failed", "error", err)
 	}
 }
 

@@ -7,7 +7,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
@@ -16,6 +15,7 @@ import (
 	"github.com/paveletto99/go-pobo"
 	"github.com/paveletto99/microservice-blueprint/internal/backup"
 	"github.com/paveletto99/microservice-blueprint/internal/setup"
+	"github.com/paveletto99/microservice-blueprint/pkg/logging"
 	"github.com/paveletto99/microservice-blueprint/pkg/server"
 	"github.com/urfave/cli/v2"
 )
@@ -28,14 +28,15 @@ type AppOptions struct {
 
 func main() {
 	// setup context
-	_, done := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	ctx, done := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-	slog.SetDefault(logger)
+	logger := logging.DefaultLogger()
+	defer logger.Sync()
+	ctx = logging.WithLogger(ctx, logger)
 	defer func() {
 		done()
 		if r := recover(); r != nil {
-			slog.Error("application panic", "panic", r)
+			logger.Errorw("application panic", "panic", r)
 		}
 	}()
 
@@ -74,21 +75,21 @@ A longer sentence, about how exactly to use this program`,
 		HideHelp:             false,
 		HideVersion:          false,
 		Action: func(c *cli.Context) error {
-			ctx, done := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+			ctx, done := signal.NotifyContext(c.Context, syscall.SIGINT, syscall.SIGTERM)
 
 			defer func() {
 				done()
 				if r := recover(); r != nil {
-					slog.Error("😱 application panic", "panic", r)
+					logger.Errorw("application panic", "panic", r)
 				}
 			}()
 			err := realMain(ctx)
 			if err != nil {
-				slog.Error("error running realMain", "error", err)
+				logging.FromContext(ctx).Errorw("error running realMain", "error", err)
 			}
 			done()
 
-			slog.Info("successful shutdown 🌂")
+			logging.FromContext(ctx).Info("successful shutdown")
 			return nil
 		},
 	}
@@ -98,7 +99,7 @@ A longer sentence, about how exactly to use this program`,
 	// Load environment variables
 	err = Environment()
 	if err != nil {
-		slog.Error("error loading environment", "error", err)
+		logger.Errorw("error loading environment", "error", err)
 		os.Exit(99)
 	}
 
@@ -106,9 +107,9 @@ A longer sentence, about how exactly to use this program`,
 	Preloader()
 
 	// Runtime
-	err = app.Run(os.Args)
+	err = app.RunContext(ctx, os.Args)
 	if err != nil {
-		slog.Error("error running app", "error", err)
+		logger.Errorw("error running app", "error", err)
 		os.Exit(-1)
 	}
 }
@@ -138,7 +139,7 @@ func realMain(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("server.New: %w", err)
 	}
-	slog.Info("listening on: ", config.Port)
+	logging.FromContext(ctx).Infow("listening", "port", config.Port)
 
 	return srv.ServeHTTPHandler(ctx, backupServer.Run(ctx))
 }

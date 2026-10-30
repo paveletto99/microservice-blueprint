@@ -5,33 +5,34 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/textproto"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/quic-go/qpack"
+	"github.com/quic-go/quic-go/http3/qlog"
+
+	"golang.org/x/net/http/httpguts"
 )
 
-// The HTTPStreamer allows taking over a HTTP/3 stream. The interface is implemented the http.Response.Body.
-// On the client side, the stream will be closed for writing, unless the DontCloseRequestStream RoundTripOpt was set.
+// HTTPStreamer allows an HTTP handler to take over an HTTP/3 stream.
+// It is implemented by the [http.ResponseWriter] passed to HTTP/3 handlers.
 // When a stream is taken over, it's the caller's responsibility to close the stream.
 type HTTPStreamer interface {
-	HTTPStream() Stream
+	HTTPStream() *Stream
 }
-
-// The maximum length of an encoded HTTP/3 frame header is 16:
-// The frame has a type and length field, both QUIC varints (maximum 8 bytes in length)
-const frameHeaderLen = 16
 
 const maxSmallResponseSize = 4096
 
 type responseWriter struct {
-	str *stream
+	str *Stream
 
-	conn   Connection
-	header http.Header
-	buf    []byte
-	status int // status code passed to WriteHeader
+	conn     *rawConn
+	header   http.Header
+	trailers map[string]struct{}
+	buf      []byte
+	status   int // status code passed to WriteHeader
 
 	// for responses smaller than maxSmallResponseSize, we buffer calls to Write,
 	// and automatically add the Content-Length header
@@ -42,6 +43,7 @@ type responseWriter struct {
 	headerComplete bool  // set once WriteHeader is called with a status code >= 200
 	headerWritten  bool  // set once the response header has been serialized to the stream
 	isHead         bool
+	trailerWritten bool // set once the response trailers has been serialized to the stream
 
 	hijacked bool // set on HTTPStream is called
 
@@ -51,11 +53,18 @@ type responseWriter struct {
 var (
 	_ http.ResponseWriter = &responseWriter{}
 	_ http.Flusher        = &responseWriter{}
-	_ Hijacker            = &responseWriter{}
+	_ Settingser          = &responseWriter{}
 	_ HTTPStreamer        = &responseWriter{}
+	// make sure that we implement (some of the) methods used by the http.ResponseController
+	_ interface {
+		SetReadDeadline(time.Time) error
+		SetWriteDeadline(time.Time) error
+		Flush()
+		FlushError() error
+	} = &responseWriter{}
 )
 
-func newResponseWriter(str *stream, conn Connection, isHead bool, logger *slog.Logger) *responseWriter {
+func newResponseWriter(str *Stream, conn *rawConn, isHead bool, logger *slog.Logger) *responseWriter {
 	return &responseWriter{
 		str:    str,
 		conn:   conn,
@@ -117,11 +126,9 @@ func (w *responseWriter) sniffContentType(p []byte) {
 	// We can't use `w.header.Get` here since if the Content-Type was set to nil, we shouldn't do sniffing.
 	_, haveType := w.header["Content-Type"]
 
-	// If the Transfer-Encoding or Content-Encoding was set and is non-blank,
-	// we shouldn't sniff the body.
-	hasTE := w.header.Get("Transfer-Encoding") != ""
+	// If the Content-Encoding was set and is non-blank, we shouldn't sniff the body.
 	hasCE := w.header.Get("Content-Encoding") != ""
-	if !hasCE && !haveType && !hasTE && len(p) > 0 {
+	if !hasCE && !haveType && len(p) > 0 {
 		w.header.Set("Content-Type", http.DetectContentType(p))
 	}
 }
@@ -161,7 +168,7 @@ func (w *responseWriter) doWrite(p []byte) (int, error) {
 	if !w.headerWritten {
 		w.sniffContentType(w.smallResponseBuf)
 		if err := w.writeHeader(w.status); err != nil {
-			return 0, maybeReplaceError(err)
+			return 0, err
 		}
 		w.headerWritten = true
 	}
@@ -173,12 +180,19 @@ func (w *responseWriter) doWrite(p []byte) (int, error) {
 	df := &dataFrame{Length: l}
 	w.buf = w.buf[:0]
 	w.buf = df.Append(w.buf)
+	if w.str.qlogger != nil {
+		w.str.qlogger.RecordEvent(qlog.FrameCreated{
+			StreamID: w.str.StreamID(),
+			Raw:      qlog.RawInfo{Length: len(w.buf) + int(l), PayloadLength: int(l)},
+			Frame:    qlog.Frame{Frame: qlog.DataFrame{}},
+		})
+	}
 	if _, err := w.str.writeUnframed(w.buf); err != nil {
-		return 0, maybeReplaceError(err)
+		return 0, err
 	}
 	if len(w.smallResponseBuf) > 0 {
 		if _, err := w.str.writeUnframed(w.smallResponseBuf); err != nil {
-			return 0, maybeReplaceError(err)
+			return 0, err
 		}
 		w.smallResponseBuf = nil
 	}
@@ -187,23 +201,51 @@ func (w *responseWriter) doWrite(p []byte) (int, error) {
 		var err error
 		n, err = w.str.writeUnframed(p)
 		if err != nil {
-			return n, maybeReplaceError(err)
+			return n, err
 		}
 	}
 	return n, nil
 }
 
 func (w *responseWriter) writeHeader(status int) error {
+	var headerFields []qlog.HeaderField // only used for qlog
 	var headers bytes.Buffer
 	enc := qpack.NewEncoder(&headers)
 	if err := enc.WriteField(qpack.HeaderField{Name: ":status", Value: strconv.Itoa(status)}); err != nil {
 		return err
 	}
+	if w.str.qlogger != nil {
+		headerFields = append(headerFields, qlog.HeaderField{Name: ":status", Value: strconv.Itoa(status)})
+	}
+
+	// Handle trailer fields
+	if vals, ok := w.header["Trailer"]; ok {
+		for _, val := range vals {
+			for trailer := range strings.SplitSeq(val, ",") {
+				// We need to convert to the canonical header key value here because this will be called when using
+				// headers.Add or headers.Set.
+				trailer = textproto.CanonicalMIMEHeaderKey(strings.TrimSpace(trailer))
+				w.declareTrailer(trailer)
+			}
+		}
+	}
 
 	for k, v := range w.header {
+		if _, excluded := w.trailers[k]; excluded {
+			continue
+		}
+		// Ignore "Trailer:" prefixed headers
+		if strings.HasPrefix(k, http.TrailerPrefix) {
+			continue
+		}
 		for index := range v {
-			if err := enc.WriteField(qpack.HeaderField{Name: strings.ToLower(k), Value: v[index]}); err != nil {
+			name := strings.ToLower(k)
+			value := v[index]
+			if err := enc.WriteField(qpack.HeaderField{Name: name, Value: value}); err != nil {
 				return err
+			}
+			if w.str.qlogger != nil {
+				headerFields = append(headerFields, qlog.HeaderField{Name: name, Value: value})
 			}
 		}
 	}
@@ -211,6 +253,10 @@ func (w *responseWriter) writeHeader(status int) error {
 	buf := make([]byte, 0, frameHeaderLen+headers.Len())
 	buf = (&headersFrame{Length: uint64(headers.Len())}).Append(buf)
 	buf = append(buf, headers.Bytes()...)
+
+	if w.str.qlogger != nil {
+		qlogCreatedHeadersFrame(w.str.qlogger, w.str.StreamID(), len(buf), headers.Len(), headerFields)
+	}
 
 	_, err := w.str.writeUnframed(buf)
 	return err
@@ -224,6 +270,17 @@ func (w *responseWriter) FlushError() error {
 	return err
 }
 
+func (w *responseWriter) flushTrailers() {
+	if w.trailerWritten {
+		return
+	}
+	if err := w.writeTrailers(); err != nil {
+		if w.logger != nil {
+			w.logger.Debug("could not write trailers", "error", err)
+		}
+	}
+}
+
 func (w *responseWriter) Flush() {
 	if err := w.FlushError(); err != nil {
 		if w.logger != nil {
@@ -232,7 +289,51 @@ func (w *responseWriter) Flush() {
 	}
 }
 
-func (w *responseWriter) HTTPStream() Stream {
+// declareTrailer adds a trailer to the trailer list, while also validating that the trailer has a
+// valid name.
+func (w *responseWriter) declareTrailer(k string) {
+	if !httpguts.ValidTrailerHeader(k) {
+		// Forbidden by RFC 9110, section 6.5.1.
+		if w.logger != nil {
+			w.logger.Debug("ignoring invalid trailer", slog.String("header", k))
+		}
+		return
+	}
+	if w.trailers == nil {
+		w.trailers = make(map[string]struct{})
+	}
+	w.trailers[k] = struct{}{}
+}
+
+// writeTrailers will write trailers to the stream if there are any.
+func (w *responseWriter) writeTrailers() error {
+	// promote headers added via "Trailer:" convention as trailers, these can be added after
+	// streaming the status/headers have been written.
+	for k := range w.header {
+		if strings.HasPrefix(k, http.TrailerPrefix) {
+			w.declareTrailer(k)
+		}
+	}
+
+	if len(w.trailers) == 0 {
+		return nil
+	}
+
+	trailers := make(http.Header, len(w.trailers))
+	for trailer := range w.trailers {
+		if vals, ok := w.header[trailer]; ok {
+			trailers[strings.TrimPrefix(trailer, http.TrailerPrefix)] = vals
+		}
+	}
+
+	written, err := writeTrailers(w.str.datagramStream, trailers, w.str.StreamID(), w.str.qlogger)
+	if written {
+		w.trailerWritten = true
+	}
+	return maybeReplaceError(err)
+}
+
+func (w *responseWriter) HTTPStream() *Stream {
 	w.hijacked = true
 	w.Flush()
 	return w.str
@@ -240,8 +341,12 @@ func (w *responseWriter) HTTPStream() Stream {
 
 func (w *responseWriter) wasStreamHijacked() bool { return w.hijacked }
 
-func (w *responseWriter) Connection() Connection {
-	return w.conn
+func (w *responseWriter) ReceivedSettings() <-chan struct{} {
+	return w.conn.ReceivedSettings()
+}
+
+func (w *responseWriter) Settings() *Settings {
+	return w.conn.Settings()
 }
 
 func (w *responseWriter) SetReadDeadline(deadline time.Time) error {

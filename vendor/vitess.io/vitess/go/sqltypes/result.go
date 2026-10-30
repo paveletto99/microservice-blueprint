@@ -18,6 +18,7 @@ package sqltypes
 
 import (
 	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"slices"
 
@@ -86,12 +87,14 @@ func (result *Result) Repair(fields []*querypb.Field) {
 	}
 }
 
-// ReplaceKeyspace replaces all the non-empty Database identifiers in the result
-// set with the given keyspace name
-func (result *Result) ReplaceKeyspace(keyspace string) {
+// ReplaceKeyspace rewrites the Database identifier of every field whose
+// Database matches dbName (the physical MySQL database name) to the given
+// keyspace name. Fields referencing other schemas (e.g. information_schema)
+// are left intact.
+func (result *Result) ReplaceKeyspace(dbName, keyspace string) {
 	// Change database name in mysql output to the keyspace name
 	for _, f := range result.Fields {
-		if f.Database != "" {
+		if f.Database == dbName {
 			f.Database = keyspace
 		}
 	}
@@ -284,7 +287,7 @@ func hashCodeForRow(val []Value) string {
 	h := sha256.New()
 	fmt.Fprintf(h, "%v", val)
 
-	return fmt.Sprintf("%x", h.Sum(nil))
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 // MakeRowTrusted converts a *querypb.Row to []Value based on the types

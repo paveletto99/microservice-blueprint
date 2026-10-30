@@ -19,8 +19,11 @@ package servenv
 import (
 	"context"
 	"crypto/tls"
+	"fmt"
+	"log/slog"
 	"math"
 	"net"
+	"os"
 	"strconv"
 	"time"
 
@@ -32,12 +35,14 @@ import (
 	"google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/keepalive"
+	"google.golang.org/grpc/orca"
 	"google.golang.org/grpc/reflection"
 
 	"vitess.io/vitess/go/trace"
 	"vitess.io/vitess/go/vt/grpccommon"
 	"vitess.io/vitess/go/vt/grpcoptionaltls"
 	"vitess.io/vitess/go/vt/log"
+	"vitess.io/vitess/go/vt/utils"
 	"vitess.io/vitess/go/vt/vttls"
 )
 
@@ -63,6 +68,9 @@ var (
 
 	// GRPCServer is the global server to serve gRPC.
 	GRPCServer *grpc.Server
+
+	// GRPC server metrics recorder
+	GRPCServerMetricsRecorder orca.ServerMetricsRecorder
 
 	authPlugin Authenticator
 )
@@ -100,8 +108,16 @@ var (
 	// there are no active streams, server will send GOAWAY and close the connection.
 	gRPCKeepAliveEnforcementPolicyPermitWithoutStream bool
 
+	// Enable ORCA metrics to be sent from the server to the client to be used for load balancing.
+	gRPCEnableOrcaMetrics bool
+
 	gRPCKeepaliveTime    = 10 * time.Second
 	gRPCKeepaliveTimeout = 10 * time.Second
+)
+
+// Injectable behavior for testing.
+var (
+	orcaRegisterFunc = orca.Register
 )
 
 // TLS variables.
@@ -129,47 +145,48 @@ var (
 // ParseFlags(WithArgs)? if they wish to run a gRPC server.
 func RegisterGRPCServerFlags() {
 	OnParse(func(fs *pflag.FlagSet) {
-		fs.IntVar(&gRPCPort, "grpc_port", gRPCPort, "Port to listen on for gRPC calls. If zero, do not listen.")
-		fs.StringVar(&gRPCBindAddress, "grpc_bind_address", gRPCBindAddress, "Bind address for gRPC calls. If empty, listen on all addresses.")
-		fs.DurationVar(&gRPCMaxConnectionAge, "grpc_max_connection_age", gRPCMaxConnectionAge, "Maximum age of a client connection before GoAway is sent.")
-		fs.DurationVar(&gRPCMaxConnectionAgeGrace, "grpc_max_connection_age_grace", gRPCMaxConnectionAgeGrace, "Additional grace period after grpc_max_connection_age, after which connections are forcibly closed.")
-		fs.IntVar(&gRPCInitialConnWindowSize, "grpc_server_initial_conn_window_size", gRPCInitialConnWindowSize, "gRPC server initial connection window size")
-		fs.IntVar(&gRPCInitialWindowSize, "grpc_server_initial_window_size", gRPCInitialWindowSize, "gRPC server initial window size")
-		fs.DurationVar(&gRPCKeepAliveEnforcementPolicyMinTime, "grpc_server_keepalive_enforcement_policy_min_time", gRPCKeepAliveEnforcementPolicyMinTime, "gRPC server minimum keepalive time")
-		fs.BoolVar(&gRPCKeepAliveEnforcementPolicyPermitWithoutStream, "grpc_server_keepalive_enforcement_policy_permit_without_stream", gRPCKeepAliveEnforcementPolicyPermitWithoutStream, "gRPC server permit client keepalive pings even when there are no active streams (RPCs)")
+		utils.SetFlagIntVar(fs, &gRPCPort, "grpc-port", gRPCPort, "Port to listen on for gRPC calls. If zero, do not listen.")
+		utils.SetFlagStringVar(fs, &gRPCBindAddress, "grpc-bind-address", gRPCBindAddress, "Bind address for gRPC calls. If empty, listen on all addresses.")
+		utils.SetFlagDurationVar(fs, &gRPCMaxConnectionAge, "grpc-max-connection-age", gRPCMaxConnectionAge, "Maximum age of a client connection before GoAway is sent.")
+		utils.SetFlagDurationVar(fs, &gRPCMaxConnectionAgeGrace, "grpc-max-connection-age-grace", gRPCMaxConnectionAgeGrace, "Additional grace period after grpc-max-connection-age, after which connections are forcibly closed.")
+		utils.SetFlagIntVar(fs, &gRPCInitialConnWindowSize, "grpc-server-initial-conn-window-size", gRPCInitialConnWindowSize, "gRPC server initial connection window size")
+		utils.SetFlagIntVar(fs, &gRPCInitialWindowSize, "grpc-server-initial-window-size", gRPCInitialWindowSize, "gRPC server initial window size")
+		utils.SetFlagDurationVar(fs, &gRPCKeepAliveEnforcementPolicyMinTime, "grpc-server-keepalive-enforcement-policy-min-time", gRPCKeepAliveEnforcementPolicyMinTime, "gRPC server minimum keepalive time")
+		utils.SetFlagBoolVar(fs, &gRPCKeepAliveEnforcementPolicyPermitWithoutStream, "grpc-server-keepalive-enforcement-policy-permit-without-stream", gRPCKeepAliveEnforcementPolicyPermitWithoutStream, "gRPC server permit client keepalive pings even when there are no active streams (RPCs)")
+		utils.SetFlagBoolVar(fs, &gRPCEnableOrcaMetrics, "grpc-enable-orca-metrics", gRPCEnableOrcaMetrics, "gRPC server option to enable sending ORCA metrics to clients for load balancing")
 
-		fs.StringVar(&gRPCCert, "grpc_cert", gRPCCert, "server certificate to use for gRPC connections, requires grpc_key, enables TLS")
-		fs.StringVar(&gRPCKey, "grpc_key", gRPCKey, "server private key to use for gRPC connections, requires grpc_cert, enables TLS")
-		fs.StringVar(&gRPCCA, "grpc_ca", gRPCCA, "server CA to use for gRPC connections, requires TLS, and enforces client certificate check")
-		fs.StringVar(&gRPCCRL, "grpc_crl", gRPCCRL, "path to a certificate revocation list in PEM format, client certificates will be further verified against this file during TLS handshake")
-		fs.BoolVar(&gRPCEnableOptionalTLS, "grpc_enable_optional_tls", gRPCEnableOptionalTLS, "enable optional TLS mode when a server accepts both TLS and plain-text connections on the same port")
-		fs.StringVar(&gRPCServerCA, "grpc_server_ca", gRPCServerCA, "path to server CA in PEM format, which will be combine with server cert, return full certificate chain to clients")
-		fs.DurationVar(&gRPCKeepaliveTime, "grpc_server_keepalive_time", gRPCKeepaliveTime, "After a duration of this time, if the server doesn't see any activity, it pings the client to see if the transport is still alive.")
-		fs.DurationVar(&gRPCKeepaliveTimeout, "grpc_server_keepalive_timeout", gRPCKeepaliveTimeout, "After having pinged for keepalive check, the server waits for a duration of Timeout and if no activity is seen even after that the connection is closed.")
+		utils.SetFlagStringVar(fs, &gRPCCert, "grpc-cert", gRPCCert, "server certificate to use for gRPC connections, requires grpc-key, enables TLS")
+		utils.SetFlagStringVar(fs, &gRPCKey, "grpc-key", gRPCKey, "server private key to use for gRPC connections, requires grpc-cert, enables TLS")
+		utils.SetFlagStringVar(fs, &gRPCCA, "grpc-ca", gRPCCA, "server CA to use for gRPC connections, requires TLS, and enforces client certificate check")
+		utils.SetFlagStringVar(fs, &gRPCCRL, "grpc-crl", gRPCCRL, "path to a certificate revocation list in PEM format, client certificates will be further verified against this file during TLS handshake")
+		utils.SetFlagBoolVar(fs, &gRPCEnableOptionalTLS, "grpc-enable-optional-tls", gRPCEnableOptionalTLS, "enable optional TLS mode when a server accepts both TLS and plain-text connections on the same port; plain-text connections are served unauthenticated, even with --grpc-ca")
+		utils.SetFlagStringVar(fs, &gRPCServerCA, "grpc-server-ca", gRPCServerCA, "path to server CA in PEM format, which will be combine with server cert, return full certificate chain to clients")
+		utils.SetFlagDurationVar(fs, &gRPCKeepaliveTime, "grpc-server-keepalive-time", gRPCKeepaliveTime, "After a duration of this time, if the server doesn't see any activity, it pings the client to see if the transport is still alive.")
+		utils.SetFlagDurationVar(fs, &gRPCKeepaliveTimeout, "grpc-server-keepalive-timeout", gRPCKeepaliveTimeout, "After having pinged for keepalive check, the server waits for a duration of Timeout and if no activity is seen even after that the connection is closed.")
 	})
 }
 
-// GRPCCert returns the value of the `--grpc_cert` flag.
+// GRPCCert returns the value of the `--grpc-cert` flag.
 func GRPCCert() string {
 	return gRPCCert
 }
 
-// GRPCCertificateAuthority returns the value of the `--grpc_ca` flag.
+// GRPCCertificateAuthority returns the value of the `--grpc-ca` flag.
 func GRPCCertificateAuthority() string {
 	return gRPCCA
 }
 
-// GRPCKey returns the value of the `--grpc_key` flag.
+// GRPCKey returns the value of the `--grpc-key` flag.
 func GRPCKey() string {
 	return gRPCKey
 }
 
-// GRPCPort returns the value of the `--grpc_port` flag.
+// GRPCPort returns the value of the `--grpc-port` flag.
 func GRPCPort() int {
 	return gRPCPort
 }
 
-// GRPCPort returns the value of the `--grpc_bind_address` flag.
+// GRPCPort returns the value of the `--grpc-bind-address` flag.
 func GRPCBindAddress() string {
 	return gRPCBindAddress
 }
@@ -193,21 +210,40 @@ func isGRPCEnabled() bool {
 func createGRPCServer() {
 	// skip if not registered
 	if !isGRPCEnabled() {
-		log.Infof("Skipping gRPC server creation")
+		log.Info("Skipping gRPC server creation")
 		return
 	}
 
+	tlsEnabled, err := vttls.ServerTLSEnabled(gRPCCert, gRPCKey, gRPCCRL)
+	if err != nil {
+		log.Error("Failed to configure gRPC TLS", slog.Any("error", err))
+		os.Exit(1)
+	}
+
 	var opts []grpc.ServerOption
-	if gRPCCert != "" && gRPCKey != "" {
+	if tlsEnabled {
 		config, err := vttls.ServerConfig(gRPCCert, gRPCKey, gRPCCA, gRPCCRL, gRPCServerCA, tls.VersionTLS12)
 		if err != nil {
-			log.Exitf("Failed to log gRPC cert/key/ca: %v", err)
+			log.Error(fmt.Sprintf("Failed to log gRPC cert/key/ca: %v", err))
+			os.Exit(1)
 		}
 
 		// create the creds server options
 		creds := credentials.NewTLS(config)
 		if gRPCEnableOptionalTLS {
-			log.Warning("Optional TLS is active. Plain-text connections will be accepted")
+			// Optional TLS is for moving clients to TLS one at a time: the
+			// plain-text connections are served, unauthenticated, until the
+			// last client has moved and the flag is dropped. Say so plainly
+			// when a client CA is configured, since --grpc-ca then only holds
+			// for the TLS connections, and point at the stats that show the
+			// plain-text connections without claiming they prove that every
+			// client has moved: one that is offline or connects only now and
+			// then does not show in them.
+			if gRPCCA != "" {
+				log.Warn("Optional TLS is active. Plain-text connections will be accepted and are not authenticated: the client certificate check of --grpc-ca only applies to TLS connections. Drop --grpc-enable-optional-tls once every client uses TLS. The GrpcOptionalTlsOpenConnections and GrpcOptionalTlsConnections stats show whether plain-text connections are open now and whether new ones are still being made; a client that is offline or connects only now and then can show in neither")
+			} else {
+				log.Warn("Optional TLS is active. Plain-text connections will be accepted")
+			}
 			creds = grpcoptionaltls.New(creds)
 		}
 		opts = []grpc.ServerOption{grpc.Creds(creds)}
@@ -220,17 +256,22 @@ func createGRPCServer() {
 	// Note: For gRPC 1.0.0 it's sufficient to set the limit on the server only
 	// because it's not enforced on the client side.
 	msgSize := grpccommon.MaxMessageSize()
-	log.Infof("Setting grpc max message size to %d", msgSize)
+	log.Info(fmt.Sprintf("Setting grpc max message size to %d", msgSize))
 	opts = append(opts, grpc.MaxRecvMsgSize(msgSize))
 	opts = append(opts, grpc.MaxSendMsgSize(msgSize))
 
+	if gRPCEnableOrcaMetrics {
+		GRPCServerMetricsRecorder = orca.NewServerMetricsRecorder()
+		opts = append(opts, orca.CallMetricsServerOption(GRPCServerMetricsRecorder))
+	}
+
 	if gRPCInitialConnWindowSize != 0 {
-		log.Infof("Setting grpc server initial conn window size to %d", int32(gRPCInitialConnWindowSize))
+		log.Info(fmt.Sprintf("Setting grpc server initial conn window size to %d", int32(gRPCInitialConnWindowSize)))
 		opts = append(opts, grpc.InitialConnWindowSize(int32(gRPCInitialConnWindowSize)))
 	}
 
 	if gRPCInitialWindowSize != 0 {
-		log.Infof("Setting grpc server initial window size to %d", int32(gRPCInitialWindowSize))
+		log.Info(fmt.Sprintf("Setting grpc server initial window size to %d", int32(gRPCInitialWindowSize)))
 		opts = append(opts, grpc.InitialWindowSize(int32(gRPCInitialWindowSize)))
 	}
 
@@ -258,11 +299,12 @@ func interceptors() []grpc.ServerOption {
 	interceptors := &serverInterceptorBuilder{}
 
 	if gRPCAuth != "" {
-		log.Infof("enabling auth plugin %v", gRPCAuth)
+		log.Info(fmt.Sprintf("enabling auth plugin %v", gRPCAuth))
 		pluginInitializer := GetAuthenticator(gRPCAuth)
 		authPluginImpl, err := pluginInitializer()
 		if err != nil {
-			log.Fatalf("Failed to load auth plugin: %v", err)
+			log.Error(fmt.Sprintf("Failed to load auth plugin: %v", err))
+			os.Exit(1)
 		}
 		authPlugin = authPluginImpl
 		interceptors.Add(authenticatingStreamInterceptor, authenticatingUnaryInterceptor)
@@ -287,6 +329,10 @@ func serveGRPC() {
 		return
 	}
 
+	if gRPCEnableOrcaMetrics {
+		registerOrca()
+	}
+
 	// register reflection to support list calls :)
 	reflection.Register(GRPCServer)
 
@@ -299,10 +345,12 @@ func serveGRPC() {
 	}
 
 	// listen on the port
-	log.Infof("Listening for gRPC calls on port %v", gRPCPort)
-	listener, err := net.Listen("tcp", net.JoinHostPort(gRPCBindAddress, strconv.Itoa(gRPCPort)))
+	log.Info(fmt.Sprintf("Listening for gRPC calls on port %v", gRPCPort))
+
+	listener, err := Listen("tcp", net.JoinHostPort(gRPCBindAddress, strconv.Itoa(gRPCPort)))
 	if err != nil {
-		log.Exitf("Cannot listen on port %v for gRPC: %v", gRPCPort, err)
+		log.Error(fmt.Sprintf("Cannot listen on port %v for gRPC: %v", gRPCPort, err))
+		os.Exit(1)
 	}
 
 	// and serve on it
@@ -314,7 +362,8 @@ func serveGRPC() {
 	go func() {
 		err := GRPCServer.Serve(listener)
 		if err != nil {
-			log.Exitf("Failed to start grpc server: %v", err)
+			log.Error(fmt.Sprintf("Failed to start grpc server: %v", err))
+			os.Exit(1)
 		}
 	}()
 
@@ -323,6 +372,30 @@ func serveGRPC() {
 		GRPCServer.GracefulStop()
 		log.Info("gRPC server stopped")
 	})
+}
+
+func registerOrca() {
+	if err := orcaRegisterFunc(GRPCServer, orca.ServiceOptions{
+		// The minimum interval of orca is 30 seconds, unless we enable a testing flag.
+		MinReportingInterval:  30 * time.Second,
+		ServerMetricsProvider: GRPCServerMetricsRecorder,
+	}); err != nil {
+		log.Error(fmt.Sprintf("Failed to register ORCA service: %v", err))
+		os.Exit(1)
+	}
+
+	// Initialize the server metrics values.
+	GRPCServerMetricsRecorder.SetCPUUtilization(getCpuUsage())
+	GRPCServerMetricsRecorder.SetMemoryUtilization(getMemoryUsage())
+
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			GRPCServerMetricsRecorder.SetCPUUtilization(getCpuUsage())
+			GRPCServerMetricsRecorder.SetMemoryUtilization(getMemoryUsage())
+		}
+	}()
 }
 
 // GRPCCheckServiceMap returns if we should register a gRPC service
@@ -340,7 +413,6 @@ func GRPCCheckServiceMap(name string) bool {
 
 func authenticatingStreamInterceptor(srv any, stream grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
 	newCtx, err := authPlugin.Authenticate(stream.Context(), info.FullMethod)
-
 	if err != nil {
 		return err
 	}
@@ -397,7 +469,7 @@ func (collector *serverInterceptorBuilder) AddUnary(u grpc.UnaryServerIntercepto
 
 // Build returns DialOptions to add to the grpc.Dial call
 func (collector *serverInterceptorBuilder) Build() []grpc.ServerOption {
-	log.Infof("Building interceptors with %d unary interceptors and %d stream interceptors", len(collector.unaryInterceptors), len(collector.streamInterceptors))
+	log.Info(fmt.Sprintf("Building interceptors with %d unary interceptors and %d stream interceptors", len(collector.unaryInterceptors), len(collector.streamInterceptors)))
 	switch len(collector.unaryInterceptors) + len(collector.streamInterceptors) {
 	case 0:
 		return []grpc.ServerOption{}

@@ -2,11 +2,53 @@
 
 Use this as a starting point for Go programs, CLI tools, Services, Daemons, Libraries, etc
 
+## Service-to-service authentication with an external IdP
+
+```shell
+docker compose up --build --wait
+./scripts/smoke.sh
+```
+
+Configure your external OAuth provider using `.env.example` before starting
+Service A and Service B. The provider must issue supported signed JWT access
+tokens and publish HTTPS JWKS; no IdP or token signer runs in this repository.
+Tests use a test-only HTTPS fake issuer and need no external credentials.
+See [the complete authentication guide](docs/service-auth.md) for architecture,
+environment variables, explicit claim mappings, declarative policies, curl examples,
+threat model, production limitations and source ZIP instructions.
+
 <https://github.com/sethvargo/go-limiter>
 <https://github.com/apple/pkl?tab=readme-ov-file>
 <https://sourcegraph.com/github.com/scylladb/scylla-operator/-/blob/pkg/probeserver/scylladbapistatus/prober.go?L117:10-117:16>
 <https://packagemain.tech/p/graceful-shutdowns-k8s-go>
 <https://github.com/uber-go/mock/tree/main>
+
+## Logging
+
+Application logging uses `pkg/logging`. Use `logging.FromContext(ctx)` when a
+context is available, or `logging.DefaultLogger()` otherwise. Log structured
+fields with `Infow`, `Warnw`, and `Errorw`; do not log configuration structs or
+credentials.
+
+`LOG_LEVEL` defaults to `INFO`. Logs are JSON on stderr by default; set
+`LOG_MODE=development` for console output. Use `logging.WithLogger(ctx, logger)`
+to attach a request-specific logger.
+
+## Tests
+
+```shell
+go test -race ./...
+```
+
+HTTP/3 and metrics tests start their own local servers on ephemeral ports.
+The Scylla integration test is opt-in and requires an **isolated test keyspace**
+with the `mutant_data` table. It inserts a unique fixture, verifies it, and cleans
+it up:
+
+```shell
+SCYLLA_TEST_HOST=127.0.0.1:9042 SCYLLA_TEST_KEYSPACE=blueprint_test \
+  go test -race ./internal/scylla -run TestClusterIntegration
+```
 
 ## TODO
 
@@ -36,10 +78,9 @@ package main
 
 import (
     "context"
-    "crypto/tls"
-    "log"
     "net"
 
+    "github.com/paveletto99/microservice-blueprint/pkg/logging"
     "github.com/spiffe/go-spiffe/v2/spiffetls/tlsconfig"
     "github.com/spiffe/go-spiffe/v2/workloadapi"
     "google.golang.org/grpc"
@@ -47,12 +88,14 @@ import (
 )
 
 func main() {
-    ctx := context.Background()
+    logger := logging.DefaultLogger()
+    defer logger.Sync()
+    ctx := logging.WithLogger(context.Background(), logger)
 
     // Create a Workload API client
     client, err := workloadapi.New(ctx, workloadapi.WithAddr("unix:///tmp/spire-agent.sock"))
     if err != nil {
-        log.Fatalf("Unable to create Workload API client: %v", err)
+        logger.Fatalw("unable to create Workload API client", "error", err)
     }
     defer client.Close()
 
@@ -67,12 +110,12 @@ func main() {
 
     lis, err := net.Listen("tcp", ":50051")
     if err != nil {
-        log.Fatalf("Failed to listen: %v", err)
+        logger.Fatalw("failed to listen", "error", err)
     }
 
-    log.Println("Starting gRPC server...")
+    logger.Info("starting gRPC server")
     if err := grpcServer.Serve(lis); err != nil {
-        log.Fatalf("Failed to serve: %v", err)
+        logger.Fatalw("failed to serve", "error", err)
     }
 }
 
@@ -87,9 +130,8 @@ package main
 
 import (
     "context"
-    "crypto/tls"
-    "log"
 
+    "github.com/paveletto99/microservice-blueprint/pkg/logging"
     "github.com/spiffe/go-spiffe/v2/spiffetls/tlsconfig"
     "github.com/spiffe/go-spiffe/v2/workloadapi"
     "google.golang.org/grpc"
@@ -97,12 +139,14 @@ import (
 )
 
 func main() {
-    ctx := context.Background()
+    logger := logging.DefaultLogger()
+    defer logger.Sync()
+    ctx := logging.WithLogger(context.Background(), logger)
 
     // Create a Workload API client
     client, err := workloadapi.New(ctx, workloadapi.WithAddr("unix:///tmp/spire-agent.sock"))
     if err != nil {
-        log.Fatalf("Unable to create Workload API client: %v", err)
+        logger.Fatalw("unable to create Workload API client", "error", err)
     }
     defer client.Close()
 
@@ -112,7 +156,7 @@ func main() {
     // Dial gRPC server with the TLS configuration
     conn, err := grpc.Dial("localhost:50051", grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig)))
     if err != nil {
-        log.Fatalf("Failed to dial server: %v", err)
+        logger.Fatalw("failed to dial server", "error", err)
     }
     defer conn.Close()
 

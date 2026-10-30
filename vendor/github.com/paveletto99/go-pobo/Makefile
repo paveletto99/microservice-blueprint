@@ -77,3 +77,43 @@ ko-del:
 .PHONY: local-repo
 local-repo:
 	docker run -d --net=kind --restart=always -p "$(local_docker_repo):5000" --name "kind-registry" registry:2
+
+.PHONY: install-hooks
+install-hooks:
+	git config core.hooksPath .githooks
+	@echo "Git hooks installed from .githooks/"
+	@echo "Pre-push hook will run: make fmt-check lint test"
+
+.PHONY: vet
+vet:
+	$Q go vet -mod=vendor github.com/cloudflare/cloudflared/...
+
+.PHONY: fmt
+fmt:
+	@goimports -l -w -local github.com/cloudflare/cloudflared $$(go list -mod=vendor -f '{{.Dir}}' -a ./... | fgrep -v tunnelrpc/proto)
+	@go fmt $$(go list -mod=vendor -f '{{.Dir}}' -a ./... | fgrep -v tunnelrpc/proto)
+
+.PHONY: fmt-check
+fmt-check:
+	@./.ci/scripts/fmt-check.sh
+
+.PHONY: lint
+lint:
+	@golangci-lint run
+
+.PHONY: test
+test: vet
+	$Q go test -json -v -mod=vendor -race $(LDFLAGS) ./... 2>&1 | tee $(GO_TEST_LOG_OUTPUT)
+ifneq ($(FIPS), true)
+	@go run -mod=readonly github.com/gotesttools/gotestfmt/v2/cmd/gotestfmt@latest -input $(GO_TEST_LOG_OUTPUT)
+endif
+
+.PHONY: cover
+cover:
+	@echo ""
+	@echo "=====> Total test coverage: <====="
+	@echo ""
+	# Print the overall coverage here for quick access.
+	$Q go tool cover -func ".cover/c.out" | grep "total:" | awk '{print $$3}'
+	# Generate the HTML report that can be viewed from the browser in CI.
+	$Q go tool cover -html ".cover/c.out" -o .cover/all.html

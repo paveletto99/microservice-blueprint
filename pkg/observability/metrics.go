@@ -5,12 +5,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net/http"
 
 	"strings"
 	"time"
 
+	"github.com/paveletto99/microservice-blueprint/pkg/logging"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
@@ -28,6 +28,7 @@ type MetricsDoneFunc func() error
 // ServeMetricsIfPrometheus serves the opentelemetry metrics at /metrics when
 // OBSERVABILITY_EXPORTER set to "prometheus".
 func ServeMetricsIfPrometheus(ctx context.Context) (MetricsDoneFunc, error) {
+	logger := logging.FromContext(ctx)
 	// exporter := os.Getenv("OBSERVABILITY_EXPORTER")
 
 	exporter := "prometheus"
@@ -52,15 +53,15 @@ func ServeMetricsIfPrometheus(ctx context.Context) (MetricsDoneFunc, error) {
 		// Start the server in the background.
 		go func() {
 			if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-				slog.Error("failed to serve prometheus metrics", "error", err)
+				logger.Errorw("failed to serve prometheus metrics", "error", err)
 				return
 			}
 		}()
-		slog.Debug("prometheus exporter is running", "port", metricsPort)
+		logger.Debugw("prometheus exporter is running", "port", metricsPort)
 
 		// Create the shutdown closer.
 		metricsDone := func() error {
-			slog.Debug("shutting down prometheus metrics exporter")
+			logger.Debug("shutting down prometheus metrics exporter")
 
 			shutdownCtx, done := context.WithTimeout(context.Background(), 10*time.Second)
 			defer done()
@@ -68,7 +69,7 @@ func ServeMetricsIfPrometheus(ctx context.Context) (MetricsDoneFunc, error) {
 			if err := srv.Shutdown(shutdownCtx); err != nil {
 				return fmt.Errorf("failed to shutdown prometheus metrics exporter: %w", err)
 			}
-			slog.Debug("finished shutting down prometheus metrics exporter")
+			logger.Debug("finished shutting down prometheus metrics exporter")
 
 			return nil
 		}
