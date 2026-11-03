@@ -1,11 +1,9 @@
 .idea*
-.tar.gz
-.o
-.ll
-pobo
-release
+*.tar.gz
+*.o
+*.ll
 /.env
-/dist/
 /bin/
+/dist/
 __pycache__/
 *.pyc

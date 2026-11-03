@@ -2,7 +2,8 @@
 
 ## Scope and setup
 
-This repository runs only Service A and Service B. Your external IdP owns client
+The standard Compose stack runs Service A and Service B; the SPIFFE apps profile
+also runs the simulated [payment service](payments.md). Your external IdP owns client
 registration, credentials, role grants, token issuance and signing-key rotation.
 There is no production IdP, private signing key, discovery endpoint or rotation
 command here. The HTTPS fake issuer exists exclusively in `*_test.go` files.
@@ -140,7 +141,8 @@ within the configured staleness limit (default ten minutes), while tokens must
 still pass expiry checks. Stale/uninitialized caches fail closed. Key publication
 overlap and retirement are the external provider's responsibility; the consumer
 tests simulate these changes without implementing an IdP administration workflow.
-`/metrics` exposes only cache age, key count and readiness.
+`/metrics` exposes cache age, key count and readiness alongside bounded request
+metrics from the [shared request stack](request-flows.md).
 
 Authentication installs verified normalized claims in a private context key.
 Authorization does not parse tokens. `Policy` matches exact case-sensitive values,
@@ -185,22 +187,17 @@ go test -race ./...
 go vet ./...
 go build ./...
 go test -race -count=10 ./internal/auth ./test/integration
-python3 scripts/package-source.py
 ```
 
 Tests use real RSA signatures and test-only HTTPS token/JWKS endpoints; no external
 IdP or credentials are needed. They cover policy decisions, malformed tokens,
 claims/mappings, supported metadata, cache sharing/renewal/cancellation, unknown
 keys, rotation overlap, staleness and endpoint failures. Parser fuzzing and
-deterministic timer tests remain. The existing Scylla integration is independently
-opt-in and unrelated to authentication. Real-provider smoke checks require your
+deterministic timer tests remain. Real-provider smoke checks require your
 configuration and credentials and cannot be replaced by fake-provider tests.
 
-`dist/service-auth.zip` is source-only: module pins, Go/protobuf source, tests,
-consumer Dockerfiles, Compose, scripts and documentation. The allowlist excludes
-real credentials, `.env`, private keys, build artifacts, volumes, vendor and local
-agent settings. Extract it, configure your external provider, and run Compose;
-Go tests run independently without that configuration.
+Ship source with `git archive --format=zip -o service-auth.zip HEAD`; secrets, `.env`
+and build outputs are untracked by design.
 
 For production use HTTPS for resource calls too, restrict networks/ingress, use
 secure credential storage and protect Service A's trigger interface. Standard

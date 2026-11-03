@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -13,20 +14,22 @@ import (
 
 	"github.com/paveletto99/microservice-blueprint/internal/auth"
 	"github.com/paveletto99/microservice-blueprint/internal/orders"
-	"github.com/paveletto99/microservice-blueprint/pkg/logging"
 )
 
 type orderHandlers struct{ store orders.Store }
 
-func orderError(w http.ResponseWriter, r *http.Request, operation string, err error) {
+func orderError(w http.ResponseWriter, r *http.Request, _ string, err error) {
 	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		http.Error(w, "order operation timeout", http.StatusGatewayTimeout)
+	case errors.Is(err, context.Canceled):
+		http.Error(w, "order operation canceled", http.StatusRequestTimeout)
 	case errors.Is(err, orders.ErrNotFound):
 		http.Error(w, "order not found", 404)
 	case errors.Is(err, orders.ErrInvalidID), errors.Is(err, orders.ErrInvalidItem), errors.Is(err, orders.ErrInvalidPage):
 		http.Error(w, "invalid order request", 400)
 	default:
 		// Driver errors may include bind values; do not log SQL errors or user-controlled items.
-		logging.FromContext(r.Context()).Errorw("order storage operation failed", "operation", operation)
 		http.Error(w, "order storage unavailable", 503)
 	}
 }
@@ -43,12 +46,7 @@ func decodeItem(w http.ResponseWriter, r *http.Request) (string, bool) {
 	}
 	data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 4096))
 	if err != nil {
-		var oversized *http.MaxBytesError
-		if errors.As(err, &oversized) {
-			http.Error(w, "request body too large", 413)
-		} else {
-			http.Error(w, "invalid request body", 400)
-		}
+		writeRequestReadError(w, r, err)
 		return "", false
 	}
 	if !utf8.Valid(data) {

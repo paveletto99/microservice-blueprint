@@ -1,6 +1,18 @@
-# Go template repository
+# Go cloud-native microservice blueprint
 
-Use this as a starting point for Go programs, CLI tools, Services, Daemons, Libraries, etc
+Single-module Go monorepo for cloud-native microservices.
+
+```
+cmd/<service>/        thin process entrypoints (service-a, service-b, payment, vitess-migrate)
+internal/<feature>/   business logic, API adapters, auth, middleware, generated protobuf
+pkg/                  shared, dependency-light libraries (logging, observability, database, server)
+test/                 integration tests and k6 load script
+docker/, compose*.yaml, Dockerfile.*   local SPIFFE/Envoy/Vitess stack and per-service images
+docs/                 architecture and operations guides
+```
+
+Add a service: create `cmd/<name>/main.go` (use `demoruntime.Main` + `setup.NewRequestRuntime`)
+and a `Dockerfile.<name>`; `make build` picks up every `cmd/*` automatically.
 
 ## SPIFFE mTLS, Envoy and local Vitess
 
@@ -29,6 +41,12 @@ persistence through Envoy. JWT permissions precede every storage operation.
 See [the order/driver guide](docs/orders-vitess.md) for migrations, JSON contracts,
 pool settings, pagination and CRUD smoke tests.
 
+## Simulated payments over gRPC
+
+The SPIFFE apps profile also connects Service B to a separate payment service over
+gRPC, with persistent, idempotent simulated payments. No real money moves. See
+[the payment guide](docs/payments.md) for setup, permissions and limitations.
+
 ## Service-to-service authentication with an external IdP
 
 ```shell
@@ -45,13 +63,12 @@ See [the complete authentication guide](docs/service-auth.md) for architecture,
 environment variables, explicit claim mappings, declarative policies, curl examples,
 threat model, production limitations and source ZIP instructions.
 
-<https://github.com/sethvargo/go-limiter>
-<https://github.com/apple/pkl?tab=readme-ov-file>
-<https://sourcegraph.com/github.com/scylladb/scylla-operator/-/blob/pkg/probeserver/scylladbapistatus/prober.go?L117:10-117:16>
-<https://packagemain.tech/p/graceful-shutdowns-k8s-go>
-<https://github.com/uber-go/mock/tree/main>
-
 ## Logging
+
+See [request flows](docs/request-flows.md) for the shared HTTP/gRPC middleware,
+explicit composition, capacity/deadline settings and request telemetry.
+See [observability](docs/observability.md) for authenticated Prometheus collection,
+runtime/database/readiness metrics, trace exporter health and legacy API migration.
 
 Application logging uses `pkg/logging`. Use `logging.FromContext(ctx)` when a
 context is available, or `logging.DefaultLogger()` otherwise. Log structured
@@ -65,25 +82,13 @@ to attach a request-specific logger.
 ## Tests
 
 ```shell
-go test -race ./...
+make check        # fmt, vet, race tests
 ```
 
-HTTP/3 and metrics tests start their own local servers on ephemeral ports.
-The Scylla integration test is opt-in and requires an **isolated test keyspace**
-with the `mutant_data` table. It inserts a unique fixture, verifies it, and cleans
-it up:
+Tests start their own local servers on ephemeral ports. Vitess-backed integration
+tests need the compose stack (see above).
 
-```shell
-SCYLLA_TEST_HOST=127.0.0.1:9042 SCYLLA_TEST_KEYSPACE=blueprint_test \
-  go test -race ./internal/scylla -run TestClusterIntegration
-```
+## Roadmap
 
-## TODO
-
-- database - vitess/scylla
-- add otel - ebpf auto-instrumentation
-- add prom metrics - add otel metrics
-- nats
-
-The old incomplete SPIRE Docker scaffolding and direct-Go sketches have been
-replaced by the maintained Envoy/SPIRE stack described in [docs/spiffe-envoy.md](docs/spiffe-envoy.md).
+- OTEL eBPF auto-instrumentation
+- NATS messaging

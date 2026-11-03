@@ -1,0 +1,35 @@
+global:
+  scrape_interval: 5s
+  scrape_timeout: 3s
+  evaluation_interval: 15s
+
+rule_files:
+  - /etc/prometheus/alerts.yaml
+
+# Plaintext remains inside the collector's own Envoy network namespace.
+# Envoy authenticates the exact target SPIFFE identity over mTLS on the mesh.
+scrape_configs:
+  - job_name: service-a
+    follow_redirects: false
+    honor_timestamps: false
+    body_size_limit: 2MB
+    sample_limit: 10000
+    label_limit: 20
+    static_configs:
+      - targets: ["127.0.0.1:18010"]
+  - job_name: service-b
+    follow_redirects: false
+    honor_timestamps: false
+    body_size_limit: 2MB
+    sample_limit: 10000
+    label_limit: 20
+    static_configs:
+      - targets: ["127.0.0.1:18011"]
+  - job_name: payment
+    follow_redirects: false
+    honor_timestamps: false
+    body_size_limit: 2MB
+    sample_limit: 10000
+    label_limit: 20
+    static_configs:
+      - targets: ["127.0.0.1:18012"]

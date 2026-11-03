@@ -9,14 +9,27 @@ import (
 
 	"github.com/paveletto99/microservice-blueprint/internal/api"
 	"github.com/paveletto99/microservice-blueprint/internal/auth"
+	"github.com/paveletto99/microservice-blueprint/internal/client"
 	"github.com/paveletto99/microservice-blueprint/internal/demoruntime"
 	"github.com/paveletto99/microservice-blueprint/internal/orders"
+	"github.com/paveletto99/microservice-blueprint/internal/setup"
 	"github.com/paveletto99/microservice-blueprint/pkg/database"
+	"github.com/paveletto99/microservice-blueprint/pkg/logging"
+	"github.com/paveletto99/microservice-blueprint/pkg/server"
 )
 
 func main() { demoruntime.Main(realMain) }
 
 func realMain(ctx context.Context) error {
+	requests, err := setup.NewRequestRuntime(ctx, "service-b")
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err := requests.Close(context.Background()); err != nil {
+			logging.FromContext(ctx).Error("request telemetry shutdown failed")
+		}
+	}()
 	allowedClients := strings.Fields(os.Getenv("AUTH_ALLOWED_CLIENTS"))
 	if len(allowedClients) == 0 {
 		return errors.New("auth configuration: AUTH_ALLOWED_CLIENTS is required")
@@ -33,6 +46,13 @@ func realMain(ctx context.Context) error {
 		return err
 	}
 	defer db.Close(ctx)
+	poolMetrics, err := database.NewDatabasePoolMetrics(db.Pool)
+	if err != nil {
+		return err
+	}
+	if err := requests.Stack.RegisterMetrics(poolMetrics); err != nil {
+		return err
+	}
 	store, err := orders.NewRepository(db.Pool)
 	if err != nil {
 		return err
@@ -53,9 +73,18 @@ func realMain(ctx context.Context) error {
 		return err
 	}
 	defer verifier.Close()
-	handler, err := api.NewServiceBHandler(verifier, store, allowedClients...)
+	config := api.ServiceBHandlerConfig{Verifier: verifier, Orders: store, AllowedClients: allowedClients, Requests: requests.Stack}
+	if address := os.Getenv("PAYMENT_GRPC_ADDRESS"); address != "" {
+		payments, err := client.NewPaymentClientWithInterceptor(address, requests.Stack.UnaryClientInterceptor())
+		if err != nil {
+			return err
+		}
+		defer payments.Close()
+		config.Payments = payments
+	}
+	handler, err := api.BuildServiceBHandler(config)
 	if err != nil {
 		return err
 	}
-	return demoruntime.Serve(ctx, demoruntime.HTTPServer{Address: demoruntime.Env("LISTEN_ADDRESS", ":8080"), Handler: handler})
+	return server.ServeHTTPContext(ctx, server.HTTPContextConfig{Address: demoruntime.Env("LISTEN_ADDRESS", ":8080"), Handler: handler})
 }

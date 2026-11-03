@@ -71,8 +71,19 @@ def probe_route(response=False):
     return {"match": match, "route": {"cluster": "service-b-mtls", "timeout": "5s"}}
 
 
+def metrics_route(target):
+    return {"match": {"path": "/metrics", "headers": [{"name": ":method", "string_match": {"exact": "GET"}}]}, "route": {"cluster": target, "timeout": "3s"}}
+
+
+def collector_upstreams(role, clusters, listeners):
+    for peer, host, port in (("service-a", "envoy-a", 18010), ("service-b", "envoy-b", 18011), ("payment", "envoy-payment", 18012)):
+        name = "metrics-" + peer
+        clusters.append(cluster(name, host, 8448, role, peer, http=True))
+        listeners.append(listener("outbound-" + name, "127.0.0.1", port, http_filter(name, [metrics_route(name)])))
+
+
 def build_config(role):
-    if role not in ("service-a", "service-b", "vtgate", "unauthorized"):
+    if role not in ("service-a", "service-b", "payment", "vtgate", "unauthorized", "metrics-collector"):
         raise ValueError("Unknown workload role")
     agent = {"name": "spire_agent", "type": "STATIC", "connect_timeout": "1s", "typed_extension_protocol_options": {"envoy.extensions.upstreams.http.v3.HttpProtocolOptions": {"@type": "type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions", "explicit_http_config": {"http2_protocol_options": {}}}}, "load_assignment": {"cluster_name": "spire_agent", "endpoints": [{"lb_endpoints": [{"endpoint": {"address": {"pipe": {"path": "/run/spire/agent/agent.sock"}}}}]}]}}
     clusters, listeners = [agent], []
@@ -83,19 +94,32 @@ def build_config(role):
         if role == "unauthorized":
             clusters.append(cluster("vitess-mysql-mtls", "envoy-vitess", 8445, role, "vtgate"))
             listeners.append(listener("outbound-vitess-denied", "127.0.0.1", 15993, tcp_filter("db-denied", "vitess-mysql-mtls")))
+            clusters.append(cluster("payment-mtls", "envoy-payment", 8447, role, "payment"))
+            listeners.append(listener("outbound-payment-denied", "127.0.0.1", 15051, tcp_filter("payment-denied", "payment-mtls")))
+            collector_upstreams(role, clusters, listeners)
     elif role == "service-b":
-        clusters += [cluster("app-b", "127.0.0.1", 8080), cluster("vitess-grpc-mtls", "envoy-vitess", 8444, role, "vtgate"), cluster("vitess-mysql-mtls", "envoy-vitess", 8445, role, "vtgate")]
-        listeners += [listener("inbound-service-b", "0.0.0.0", 8443, http_filter("inbound", [probe_route(True), forward("app-b")]), tls_socket(role, "service-a", downstream=True, http=True)), listener("outbound-vitess-grpc", "127.0.0.1", 15991, tcp_filter("db-grpc", "vitess-grpc-mtls")), listener("outbound-vitess-mysql", "127.0.0.1", 15993, tcp_filter("db-mysql", "vitess-mysql-mtls"))]
+        clusters += [cluster("app-b", "127.0.0.1", 8080), cluster("vitess-grpc-mtls", "envoy-vitess", 8444, role, "vtgate"), cluster("vitess-mysql-mtls", "envoy-vitess", 8445, role, "vtgate"), cluster("payment-mtls", "envoy-payment", 8447, role, "payment")]
+        listeners += [listener("inbound-service-b", "0.0.0.0", 8443, http_filter("inbound", [probe_route(True), forward("app-b")]), tls_socket(role, "service-a", downstream=True, http=True)), listener("outbound-vitess-grpc", "127.0.0.1", 15991, tcp_filter("db-grpc", "vitess-grpc-mtls")), listener("outbound-vitess-mysql", "127.0.0.1", 15993, tcp_filter("db-mysql", "vitess-mysql-mtls")), listener("outbound-payment-grpc", "127.0.0.1", 15051, tcp_filter("payment-grpc", "payment-mtls"))]
+    elif role == "payment":
+        clusters += [cluster("payment-app", "127.0.0.1", 50051), cluster("vitess-grpc-mtls", "envoy-vitess", 8446, role, "vtgate")]
+        listeners += [listener("inbound-payment", "0.0.0.0", 8447, tcp_filter("payment-inbound", "payment-app"), tls_socket(role, "service-b", downstream=True)), listener("outbound-vitess-grpc", "127.0.0.1", 15991, tcp_filter("payment-db", "vitess-grpc-mtls"))]
+    elif role == "metrics-collector":
+        collector_upstreams(role, clusters, listeners)
     else:
         for protocol, port, upstream in (("grpc", 8444, 15991), ("mysql", 8445, 15993)):
             name = "vitess-" + protocol
             clusters.append(cluster(name, "vitess", upstream))
             listeners.append(listener("inbound-" + name, "0.0.0.0", port, tcp_filter(name, name), tls_socket(role, "service-b", downstream=True)))
+        listeners.append(listener("inbound-payment-vitess-grpc", "0.0.0.0", 8446, tcp_filter("payment-vitess-grpc", "vitess-grpc"), tls_socket(role, "payment", downstream=True)))
+    if role in ("service-a", "service-b", "payment"):
+        name = "application-metrics"
+        clusters.append(cluster(name, "127.0.0.1", 9090 if role == "payment" else 8080))
+        listeners.append(listener("inbound-metrics", "0.0.0.0", 8448, http_filter("metrics-inbound", [metrics_route(name)]), tls_socket(role, "metrics-collector", downstream=True, http=True)))
     return {"node": {"id": "envoy-" + role, "cluster": "service-auth"}, "admin": {"address": {"socket_address": {"address": "127.0.0.1", "port_value": 9901}}}, "overload_manager": {"resource_monitors": [{"name": "envoy.resource_monitors.global_downstream_max_connections", "typed_config": {"@type": "type.googleapis.com/envoy.extensions.resource_monitors.downstream_connections.v3.DownstreamConnectionsConfig", "max_active_downstream_connections": 256}}]}, "static_resources": {"listeners": listeners, "clusters": clusters}}
 
 
 if __name__ == "__main__":
     output = Path(__file__).resolve().parent.parent / "docker/spiffe/envoy"
     output.mkdir(parents=True, exist_ok=True)
-    for role in ("service-a", "service-b", "vtgate", "unauthorized"):
+    for role in ("service-a", "service-b", "payment", "vtgate", "unauthorized", "metrics-collector"):
         (output / (role + ".json")).write_text(json.dumps(build_config(role), indent=2, sort_keys=True) + "\n")

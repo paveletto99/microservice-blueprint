@@ -1,0 +1,38 @@
+groups:
+  - name: service-observability
+    rules:
+      - alert: ServiceMetricsUnavailable
+        expr: up{job=~"service-a|service-b|payment"} == 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Service metrics cannot be scraped"
+      - alert: ServiceDependencyNotReady
+        expr: service_dependency_ready == 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "A service dependency is not ready"
+      - alert: TraceExportFailure
+        expr: increase(service_trace_export_batches_total{result="failure"}[5m]) > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Trace export batches are failing"
+      - alert: TraceQueueDrops
+        expr: increase(service_trace_dropped_spans_total{reason="queue_full"}[5m]) > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "The bounded trace queue is dropping sampled spans"
+      - alert: ServiceBusinessCapacityHigh
+        expr: service_business_requests_in_flight / service_business_request_capacity > 0.9
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Business request capacity is persistently saturated"

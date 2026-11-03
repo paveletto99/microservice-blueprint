@@ -39,8 +39,16 @@ do not replace a real JWT/IdP deployment smoke check.
 
 ```text
 service-a → localhost:18000 / Envoy A == SPIFFE mTLS ==> Envoy B → localhost:8080 / service-b
-                                                           |
-                                    localhost:15991 / 15993 / Envoy B
+                                                            |
+                                     localhost:15051 / Envoy B == SPIFFE mTLS ==> Envoy Payment → payment gRPC
+                                                                                       |
+                                                                localhost:15991 / Envoy Payment
+                                                                                       |
+                                                                                  SPIFFE mTLS
+                                                                                       |
+                                                                                 Envoy Vitess
+                                                            |
+                                     localhost:15991 / 15993 / Envoy B
                                                            |
                                                       SPIFFE mTLS
                                                            |
@@ -52,8 +60,10 @@ service-a → localhost:18000 / Envoy A == SPIFFE mTLS ==> Envoy B → localhost
 | Envoy workload | SPIFFE ID | Attested UID | Allowed peer |
 | --- | --- | --- | --- |
 | A | spiffe://service-auth.test/service-a | 10001 | Expects B's identity |
-| B | spiffe://service-auth.test/service-b | 10002 | Accepts A; expects vtgate for database calls |
-| Vitess gateway | spiffe://service-auth.test/vtgate | 10003 | Accepts B only |
+| B | spiffe://service-auth.test/service-b | 10002 | Accepts A; expects vtgate and payment for outbound calls |
+| Payment | spiffe://service-auth.test/payment | 10005 | Accepts B; expects vtgate for database calls |
+| Metrics collector | spiffe://service-auth.test/metrics-collector | 10006 | Metrics-only listeners accept this identity; expects A/B/payment |
+| Vitess gateway | spiffe://service-auth.test/vtgate | 10003 | Separate listeners accept B or payment |
 | Test-only unauthorized proxy | spiffe://service-auth.test/unauthorized | 10004 | Has a valid SVID but is rejected by B and Vitess |
 
 Each proxy receives only its attested identity. Both TLS directions validate the
@@ -62,6 +72,10 @@ domain. Inbound listeners require a client certificate. TLS minimum and maximum
 are explicitly TLS 1.3, avoiding Envoy's upstream TLS 1.2 default maximum.
 Secrets never appear in Envoy config: certificates, private keys and bundles
 arrive over SDS and update new connections without application restarts.
+
+The optional [observability profile](observability.md) adds metrics-only mTLS
+listeners on 8448 and a private Prometheus collector. These listeners do not route
+business traffic; the existing business and database identity policies are unchanged.
 
 SPIFFE proves workload identity and encrypts transport. JWTs still prove the
 configured issuer/audience and permissions in Go. This independent conjunction
@@ -90,7 +104,7 @@ Go handlers and their JWT policies when `apps` is enabled.
 Vitess attaches **only to an internal database network**; only Envoy Vitess joins
 both database and mesh networks. Raw query, MySQL and administration ports cannot
 be reached from mesh peers or host-published sockets. SQL authorization remains
-Vitess/MySQL's responsibility; allowing B's identity is not per-table authorization.
+Vitess/MySQL's responsibility; allowing B and payment identities is not per-table authorization.
 
 ## SPIRE bootstrap, attestation and storage
 

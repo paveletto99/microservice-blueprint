@@ -7,7 +7,7 @@ if [ -n "$(dc ps -q service-b)" ]; then
   echo "Run transport smoke without the apps profile (the test backend uses its loopback port)." >&2
   exit 1
 fi
-dc up -d --wait --wait-timeout 120 envoy-a envoy-b envoy-vitess envoy-unauthorized test-backend-b
+dc up -d --build --wait --wait-timeout 240 envoy-a envoy-b envoy-vitess envoy-unauthorized test-backend-b payment
 # Safe readiness GET only: a replaced proxy can briefly retain a previous DNS address.
 curl --silent --show-error --fail --max-time 5 --retry 10 --retry-all-errors --retry-delay 1 "http://127.0.0.1:${SPIFFE_HTTP_PORT:-18081}/__spiffe_probe"
 dc run --rm --no-deps -T probe-allowed
@@ -22,6 +22,15 @@ dc run --rm --no-deps -T db-grpc-probe
 dc run --rm --no-deps -T db-grpc-probe --crud
 dc build orders-crud-test
 dc run --rm --no-deps -T orders-crud-test
+dc build payment-crud-test payment-rpc-test payment-allowed-probe payment-denied-probe
+dc run --rm --no-deps -T payment-crud-test
+dc run --rm --no-deps -T payment-allowed-probe
+dc run --rm --no-deps -T payment-rpc-test
+dc exec -T payment /app --healthcheck http://127.0.0.1:9090/metrics
+if dc run --rm --no-deps -T payment-denied-probe >/dev/null 2>&1; then
+  echo "Unauthorized SPIFFE identity reached payment" >&2
+  exit 1
+fi
 if dc run --rm --no-deps -T db-denied-probe >/dev/null 2>&1; then
   echo "Unauthorized SPIFFE identity reached Vitess" >&2
   exit 1
@@ -34,4 +43,4 @@ fi
 if [ "${SPIFFE_CHECK_RENEWAL:-true}" = true ]; then
   dc run --rm --no-deps -T probe-allowed renewal
 fi
-echo "SPIFFE identity, proxy isolation, Vitess queries and renewal smoke checks passed."
+echo "SPIFFE identity, payment isolation, Vitess queries and renewal smoke checks passed."

@@ -113,6 +113,53 @@ services:
     volumes:
       - ./docker/spiffe/envoy/service-b.json:/config/envoy.json:ro
       - spire-agent-api:/run/spire/agent:ro
+  envoy-payment:
+    <<: *envoy
+    user: "10005:10005"
+    command: [-c, /config/envoy.json, --concurrency, "2", --log-level, warn]
+    labels:
+      io.service-auth.workload: payment
+      io.service-auth.deployment: spiffe-compose
+    volumes:
+      - ./docker/spiffe/envoy/payment.json:/config/envoy.json:ro
+      - spire-agent-api:/run/spire/agent:ro
+  envoy-collector:
+    <<: *envoy
+    profiles: [observability]
+    user: "10006:10006"
+    command: [-c, /config/envoy.json, --concurrency, "2", --log-level, warn]
+    labels:
+      io.service-auth.workload: metrics-collector
+      io.service-auth.deployment: spiffe-compose
+    volumes:
+      - ./docker/spiffe/envoy/metrics-collector.json:/config/envoy.json:ro
+      - spire-agent-api:/run/spire/agent:ro
+  prometheus:
+    <<: *secure
+    profiles: [observability]
+    image: prom/prometheus:v3.13.5@sha256:aafa9d694e6a883c02db516d9f6e5b84e14195f49a2a6456a4cca815edda72b9
+    user: "65532:65532"
+    read_only: true
+    network_mode: service:envoy-collector
+    mem_limit: 512m
+    tmpfs: ["/prometheus:rw,noexec,nosuid,size=256m,uid=65532,gid=65532"]
+    command:
+      - --config.file=/etc/prometheus/prometheus.yaml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=2h
+      - --storage.tsdb.retention.size=64MB
+      - --web.listen-address=127.0.0.1:9090
+    volumes:
+      - ./docker/observability/prometheus.yaml:/etc/prometheus/prometheus.yaml:ro
+      - ./docker/observability/alerts.yaml:/etc/prometheus/alerts.yaml:ro
+    depends_on:
+      envoy-collector:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, /bin/promtool, check, ready, --url=http://127.0.0.1:9090]
+      interval: 2s
+      timeout: 3s
+      retries: 30
   vitess:
     <<: *secure
     image: vitess/vttestserver:v24.0.5-mysql84@sha256:52e88e95533e74ae4cf50e710095ed052a133b945dd9780008a613536334fdc0
@@ -160,6 +207,48 @@ services:
         condition: service_healthy
       envoy-vitess:
         condition: service_healthy
+  payment-migrate:
+    <<: *secure
+    profiles: [apps, migrations]
+    build:
+      context: .
+      dockerfile: Dockerfile.vitess-migrate
+    read_only: true
+    network_mode: service:envoy-payment
+    environment:
+      MIGRATION_TARGET: payment
+      VTGATE_ADDRESS: "127.0.0.1:15991"
+      VTGATE_TARGET: commerce@primary
+    depends_on:
+      envoy-payment:
+        condition: service_healthy
+      envoy-vitess:
+        condition: service_healthy
+  payment:
+    <<: *secure
+    profiles: [apps]
+    build:
+      context: .
+      dockerfile: Dockerfile.payment
+    read_only: true
+    user: "65532:65532"
+    network_mode: service:envoy-payment
+    environment:
+      PAYMENT_LISTEN_ADDRESS: "127.0.0.1:50051"
+      PAYMENT_METRICS_ADDRESS: "127.0.0.1:9090"
+      REQUEST_TIMEOUT: ${PAYMENT_REQUEST_TIMEOUT:-5s}
+      REQUEST_MAX_IN_FLIGHT: ${PAYMENT_REQUEST_MAX_IN_FLIGHT:-64}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      VTGATE_ADDRESS: "127.0.0.1:15991"
+      VTGATE_TARGET: commerce@primary
+    depends_on:
+      payment-migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: [CMD, /app, --grpc-healthcheck, "127.0.0.1:50051"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
   service-b:
     <<: *secure
     profiles: [apps]
@@ -186,11 +275,17 @@ services:
       VTGATE_TARGET: commerce@primary
       VTGATE_MAX_OPEN_CONNS: ${VTGATE_MAX_OPEN_CONNS:-10}
       VTGATE_MAX_IDLE_CONNS: ${VTGATE_MAX_IDLE_CONNS:-5}
+      PAYMENT_GRPC_ADDRESS: "127.0.0.1:15051"
+      REQUEST_TIMEOUT: ${SERVICE_B_REQUEST_TIMEOUT:-5s}
+      REQUEST_MAX_IN_FLIGHT: ${SERVICE_B_REQUEST_MAX_IN_FLIGHT:-64}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
     depends_on:
       envoy-b:
         condition: service_healthy
       orders-migrate:
         condition: service_completed_successfully
+      payment:
+        condition: service_healthy
     healthcheck:
       test: [CMD, /app, --healthcheck, "http://127.0.0.1:8080/readyz"]
       interval: 2s
@@ -216,6 +311,9 @@ services:
       OAUTH_SCOPES: ${OAUTH_SCOPES:-}
       OAUTH_RESOURCE: ${OAUTH_RESOURCE:-}
       OAUTH_RESOURCE_PARAMETER: ${OAUTH_RESOURCE_PARAMETER:-resource}
+      REQUEST_TIMEOUT: ${SERVICE_A_REQUEST_TIMEOUT:-5s}
+      REQUEST_MAX_IN_FLIGHT: ${SERVICE_A_REQUEST_MAX_IN_FLIGHT:-64}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
     depends_on:
       envoy-a:
         condition: service_healthy
@@ -263,6 +361,47 @@ services:
     environment:
       VTGATE_TEST_ADDRESS: "127.0.0.1:15991"
       VTGATE_TEST_TARGET: commerce@primary
+  payment-crud-test:
+    <<: *secure
+    profiles: [tests]
+    build:
+      context: .
+      dockerfile: Dockerfile.spiffe-db-probe
+      target: crud-tests
+    entrypoint: [/orders.test, -test.run, "^TestVitessPayments$", -test.v]
+    network_mode: service:envoy-payment
+    environment:
+      VTGATE_TEST_ADDRESS: "127.0.0.1:15991"
+      VTGATE_TEST_TARGET: commerce@primary
+  payment-rpc-test:
+    <<: *secure
+    profiles: [tests]
+    build:
+      context: .
+      dockerfile: Dockerfile.spiffe-db-probe
+      target: crud-tests
+    entrypoint: [/orders.test, -test.run, "^TestSPIFFEPaymentRPC$", -test.v]
+    network_mode: service:envoy-b
+    environment:
+      PAYMENT_TEST_ADDRESS: "127.0.0.1:15051"
+      VTGATE_TEST_ADDRESS: "127.0.0.1:15991"
+      VTGATE_TEST_TARGET: commerce@primary
+  payment-allowed-probe:
+    <<: *secure
+    profiles: [tests]
+    build:
+      context: .
+      dockerfile: Dockerfile.payment
+    network_mode: service:envoy-b
+    command: [--grpc-healthcheck, "127.0.0.1:15051"]
+  payment-denied-probe:
+    <<: *secure
+    profiles: [tests]
+    build:
+      context: .
+      dockerfile: Dockerfile.payment
+    network_mode: service:envoy-unauthorized
+    command: [--grpc-healthcheck, "127.0.0.1:15051"]
   db-denied-probe:
     <<: *secure
     profiles: [tests]
@@ -278,6 +417,34 @@ services:
     user: "65532:65532"
     read_only: true
     entrypoint: [python3, /probe.py, backend]
+    volumes:
+      - ./docker/spiffe/probe.py:/probe.py:ro
+  test-backend-a:
+    <<: *secure
+    profiles: [tests]
+    image: python:3.14-slim@sha256:cd89c30eda26ee911a4611b18680086e0ea42e6f5f8cbe653d07fa7958c9cec8
+    network_mode: service:envoy-a
+    user: "65532:65532"
+    read_only: true
+    entrypoint: [python3, /probe.py, backend]
+    volumes:
+      - ./docker/spiffe/probe.py:/probe.py:ro
+  collection-probe:
+    <<: *secure
+    profiles: [observability-tests]
+    image: python:3.14-slim@sha256:cd89c30eda26ee911a4611b18680086e0ea42e6f5f8cbe653d07fa7958c9cec8
+    network_mode: service:envoy-collector
+    read_only: true
+    entrypoint: [python3, /probe.py, collection]
+    volumes:
+      - ./docker/spiffe/probe.py:/probe.py:ro
+  collection-denied-probe:
+    <<: *secure
+    profiles: [observability-tests]
+    image: python:3.14-slim@sha256:cd89c30eda26ee911a4611b18680086e0ea42e6f5f8cbe653d07fa7958c9cec8
+    network_mode: service:envoy-unauthorized
+    read_only: true
+    entrypoint: [python3, /probe.py, collection-denied]
     volumes:
       - ./docker/spiffe/probe.py:/probe.py:ro
   probe-allowed:

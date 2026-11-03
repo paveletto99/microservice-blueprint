@@ -1,94 +1,28 @@
 package observability
 
-import (
-	"errors"
-	"fmt"
-	"net"
-	"net/http"
-	"os"
-	"time"
+// PrometheusConfig is retained only for source compatibility.
+// Deprecated: use RequestTelemetryConfig and explicitly compose MetricsHandler.
+type PrometheusConfig struct{ Host, Port, ScrapePath, MetricName string }
 
-	"github.com/paveletto99/microservice-blueprint/pkg/logging"
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
-)
+// PrometheusMetrics is a retired, inert compatibility type.
+// Deprecated: use RequestTelemetry.StartRequest and RequestObservation.End.
+type PrometheusMetrics struct{}
 
-type PrometheusConfig struct {
-	Host       string
-	Port       string
-	ScrapePath string
-	MetricName string
+// Fire is inert; legacy timing and global registration have been retired.
+func (*PrometheusMetrics) Fire(string) {}
+
+// ResponseStatus is inert; use the canonical request observation instead.
+func (*PrometheusMetrics) ResponseStatus(string, int) {}
+
+// PrometheusMetricsFactory is retained only for source compatibility.
+// Deprecated: use NewRequestTelemetry; this type never starts a listener.
+type PrometheusMetricsFactory struct{}
+
+// NewPrometheusMetricsFactory rejects the retired implicit-listener API.
+// Deprecated: create RequestTelemetry and explicitly mount its MetricsHandler.
+func NewPrometheusMetricsFactory(PrometheusConfig) (MetricsFactory, error) {
+	return nil, ErrLegacyMetricsRetired
 }
 
-type PrometheusMetrics struct {
-	startedAt time.Time
-	histogram prometheus.ObserverVec
-}
-
-func (p *PrometheusMetrics) Fire(result string) {
-	observer := p.histogram.With(prometheus.Labels{
-		"method": "unknown",
-		"status": "unknown",
-		"result": result,
-	})
-	p.observe(observer)
-}
-
-func (p *PrometheusMetrics) ResponseStatus(method string, status int) {
-	observer := p.histogram.With(prometheus.Labels{
-		"method": method,
-		"status": fmt.Sprint(status),
-		"result": "unknown",
-	})
-	p.observe(observer)
-}
-
-func (p *PrometheusMetrics) observe(observer prometheus.Observer) {
-	elapsed := time.Now().Sub(p.startedAt)
-	observer.Observe(float64(elapsed.Milliseconds()))
-}
-
-type PrometheusMetricsFactory struct {
-	metricName string
-}
-
-func NewPrometheusMetricsFactory(config PrometheusConfig) (MetricsFactory, error) {
-	serveMux := http.NewServeMux()
-	serveMux.Handle(config.ScrapePath, promhttp.Handler())
-	server := http.Server{
-		Addr:    net.JoinHostPort(config.Host, config.Port),
-		Handler: serveMux,
-	}
-
-	go func() {
-		logger := logging.DefaultLogger()
-		logger.Debugw("listening for Prometheus scrapes", "host", config.Host, "port", config.Port)
-		logger.Errorw("error serving Prometheus scrapes", "error", server.ListenAndServe())
-		os.Exit(1)
-	}()
-
-	return &PrometheusMetricsFactory{metricName: config.MetricName}, nil
-}
-
-func (p PrometheusMetricsFactory) Create(eventName string) Metrics {
-	histogram := prometheus.NewHistogramVec(prometheus.HistogramOpts{
-		Name: p.metricName,
-	}, []string{"eventName", "status", "method", "result"})
-
-	if err := prometheus.Register(histogram); err != nil {
-		are := &prometheus.AlreadyRegisteredError{}
-		if errors.As(err, are) {
-			// Use previously registered metric collector
-			histogram = are.ExistingCollector.(*prometheus.HistogramVec)
-		} else {
-			// There's no other reason prometheus.Register should fail and the interface won't let
-			// us return an error.
-			panic(err)
-		}
-	}
-
-	return &PrometheusMetrics{
-		startedAt: time.Now(),
-		histogram: histogram.MustCurryWith(prometheus.Labels{"eventName": eventName}),
-	}
-}
+// Create is inert for callers constructing a retired factory directly.
+func (PrometheusMetricsFactory) Create(string) Metrics { return &PrometheusMetrics{} }

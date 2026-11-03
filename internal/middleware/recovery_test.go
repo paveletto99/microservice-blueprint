@@ -44,8 +44,8 @@ func TestRecoveryUsesContextLogger(t *testing.T) {
 		t.Fatalf("unexpected panic log: %v", entry.Entry)
 	}
 	fields := entry.ContextMap()
-	if fields["panic"] != "oops" || fields["request_id"] != "recovery-test" {
-		t.Errorf("panic log lost structured context: %v", fields)
+	if _, exposed := fields["panic"]; exposed || fields["request_id"] != "recovery-test" {
+		t.Errorf("panic log exposed raw values or lost request context: %v", fields)
 	}
 }
 

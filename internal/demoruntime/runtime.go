@@ -4,14 +4,12 @@ package demoruntime
 import (
 	"context"
 	"errors"
-	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
-	"github.com/paveletto99/microservice-blueprint/internal/middleware"
 	"github.com/paveletto99/microservice-blueprint/pkg/logging"
 )
 
@@ -57,45 +55,4 @@ func Main(realMain func(context.Context) error) {
 		logger.Errorw("demo process failed", "error", err)
 		os.Exit(1)
 	}
-}
-
-// HTTPServer describes a listener owned entirely by Serve.
-type HTTPServer struct {
-	Address string
-	Handler http.Handler
-}
-
-// Serve owns one listener and joins its serving goroutine on shutdown.
-func Serve(ctx context.Context, config HTTPServer) error {
-	runCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	listener, err := net.Listen("tcp", config.Address)
-	if err != nil {
-		return errors.New("demo server: listener startup failed")
-	}
-	defer listener.Close() // Idempotent close of the owned listener.
-	server := &http.Server{Handler: middleware.Recovery()(config.Handler), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 32 * 1024, BaseContext: func(net.Listener) context.Context { return runCtx }}
-	errorsCh := make(chan error, 1) // One terminal result; serving never blocks on shutdown.
-	go func() { errorsCh <- server.Serve(listener) }()
-	var result error
-	stopped := false
-	select {
-	case <-ctx.Done():
-	case err := <-errorsCh:
-		stopped = true
-		if !errors.Is(err, http.ErrServerClosed) {
-			result = errors.New("demo server: serving failed")
-		}
-	}
-	cancel()
-	shutdownCtx, done := context.WithTimeout(context.Background(), 5*time.Second)
-	defer done()
-	if err := server.Shutdown(shutdownCtx); err != nil {
-		server.Close()
-		result = errors.New("demo server: graceful shutdown timed out")
-	}
-	if !stopped {
-		<-errorsCh
-	}
-	return result
 }

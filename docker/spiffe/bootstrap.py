@@ -42,7 +42,7 @@ def prepare():
         atomic_file("bundle.pem", bundle)
     if not (OUTPUT / "bundle.pem").exists():
         raise RuntimeError("Incomplete bootstrap state; recreate only this demo's volumes")
-    for role, uid in (("service-a", "10001"), ("service-b", "10002"), ("vtgate", "10003"), ("unauthorized", "10004")):
+    for role, uid in (("service-a", "10001"), ("service-b", "10002"), ("vtgate", "10003"), ("unauthorized", "10004"), ("payment", "10005"), ("metrics-collector", "10006")):
         identity = "spiffe://service-auth.test/" + role
         existing = cli("entry", "show", "-spiffeID", identity)
         entries = existing.get("entries", [])

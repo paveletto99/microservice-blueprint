@@ -9,11 +9,23 @@ import (
 	"github.com/paveletto99/microservice-blueprint/internal/api"
 	"github.com/paveletto99/microservice-blueprint/internal/auth"
 	"github.com/paveletto99/microservice-blueprint/internal/demoruntime"
+	"github.com/paveletto99/microservice-blueprint/internal/setup"
+	"github.com/paveletto99/microservice-blueprint/pkg/logging"
+	"github.com/paveletto99/microservice-blueprint/pkg/server"
 )
 
 func main() { demoruntime.Main(realMain) }
 
 func realMain(ctx context.Context) error {
+	requests, err := setup.NewRequestRuntime(ctx, "service-a")
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err := requests.Close(context.Background()); err != nil {
+			logging.FromContext(ctx).Error("request telemetry shutdown failed")
+		}
+	}()
 	allowHTTP, err := strconv.ParseBool(demoruntime.Env("ALLOW_HTTP_RESOURCE", "false"))
 	if err != nil {
 		return err
@@ -32,5 +44,9 @@ func realMain(ctx context.Context) error {
 	if _, err := oauth.AccessToken(ctx); err != nil {
 		return err
 	}
-	return demoruntime.Serve(ctx, demoruntime.HTTPServer{Address: demoruntime.Env("LISTEN_ADDRESS", ":8080"), Handler: api.NewServiceAHandler(oauth, resourceURL)})
+	handler, err := api.BuildServiceAHandler(api.ServiceAHandlerConfig{OAuth: oauth, ResourceURL: resourceURL, Requests: requests.Stack})
+	if err != nil {
+		return err
+	}
+	return server.ServeHTTPContext(ctx, server.HTTPContextConfig{Address: demoruntime.Env("LISTEN_ADDRESS", ":8080"), Handler: handler})
 }

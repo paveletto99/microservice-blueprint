@@ -47,6 +47,12 @@ def main():
     if command == "backend":
         class Handler(http.server.BaseHTTPRequestHandler):
             def do_GET(self):
+                if self.path == "/metrics":
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/plain; version=0.0.4")
+                    self.end_headers()
+                    self.wfile.write(b"spiffe_test_backend_up 1\n")
+                    return
                 if self.path != "/__test_backend":
                     self.send_error(404)
                     return
@@ -56,6 +62,39 @@ def main():
             def log_message(self, *_):
                 pass
         http.server.HTTPServer(("127.0.0.1", 8080), Handler).serve_forever()
+    elif command == "collection":
+        deadline = time.monotonic() + 45
+        while time.monotonic() < deadline:
+            _, body = get("http://127.0.0.1:9090/api/v1/query?query=up")
+            result = json.loads(body)
+            jobs = {item["metric"]["job"]: item["value"][1] for item in result.get("data", {}).get("result", [])}
+            if all(jobs.get(job) == "1" for job in ("service-a", "service-b", "payment")):
+                break
+            time.sleep(1)
+        else:
+            raise RuntimeError("Prometheus did not scrape all authenticated targets")
+        for port in (18010, 18011, 18012):
+            status, body = get("http://127.0.0.1:" + str(port) + "/metrics")
+            if status != 200 or not body:
+                raise RuntimeError("Authenticated metrics route failed")
+            try:
+                get("http://127.0.0.1:" + str(port) + "/orders")
+            except urllib.error.HTTPError as error:
+                if error.code != 404:
+                    raise RuntimeError("Unexpected collector business-route rejection") from None
+            else:
+                raise RuntimeError("Collector could reach a business route")
+        _, body = get("http://127.0.0.1:9090/api/v1/query?query=service_trace_export_enabled%7Bjob%3D%22payment%22%7D")
+        if not json.loads(body).get("data", {}).get("result"):
+            raise RuntimeError("Real payment telemetry was not ingested")
+        print("Prometheus ingested all three metrics targets over SPIFFE mTLS; business routes remain inaccessible.")
+    elif command == "collection-denied":
+        for port in (18010, 18011, 18012):
+            denied_http("http://127.0.0.1:" + str(port) + "/metrics")
+            denied_http("http://127.0.0.1:" + str(port) + "/metrics", {"x-spiffe-id": "spiffe://service-auth.test/metrics-collector", "x-forwarded-client-cert": "URI=spiffe://service-auth.test/metrics-collector"})
+        denied_tcp("envoy-payment", 9090)
+        denied_tcp("envoy-collector", 9090)
+        print("Unauthorized identity, forged collector headers and raw metrics bypass were rejected.")
     elif command == "allowed":
         status, body = get("http://127.0.0.1:18000/__test_backend")
         if status != 200 or body != b"loopback-only-test-backend\n":
