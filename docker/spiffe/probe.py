@@ -6,6 +6,7 @@ import socket
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 
@@ -34,6 +35,15 @@ def denied_tcp(host, port):
         return
     connection.close()
     raise RuntimeError("Plaintext backend was reachable from a mesh peer")
+
+
+def admin_counter(name):
+    _, body = get("http://127.0.0.1:9901/stats?filter=" + urllib.parse.quote(name.rsplit(".", 1)[-1]))
+    for line in body.decode().splitlines():
+        key, _, value = line.partition(": ")
+        if key == name:
+            return int(value)
+    raise RuntimeError("Envoy admin counter missing")
 
 
 def certificate_serials():
@@ -93,17 +103,21 @@ def main():
             denied_http("http://127.0.0.1:" + str(port) + "/metrics")
             denied_http("http://127.0.0.1:" + str(port) + "/metrics", {"x-spiffe-id": "spiffe://service-auth.test/metrics-collector", "x-forwarded-client-cert": "URI=spiffe://service-auth.test/metrics-collector"})
         denied_tcp("envoy-payment", 9090)
+        denied_tcp("envoy-payment", 8448)
         denied_tcp("envoy-collector", 9090)
         print("Unauthorized identity, forged collector headers and raw metrics bypass were rejected.")
     elif command == "allowed":
         status, body = get("http://127.0.0.1:18000/__test_backend")
         if status != 200 or body != b"loopback-only-test-backend\n":
             raise RuntimeError("Authenticated proxy forwarding failed")
-        print("Authenticated mTLS forwarding to the loopback backend passed.")
+        if admin_counter("cluster.service-b-mtls.upstream_cx_http3_total") < 1:
+            raise RuntimeError("Mesh hop did not use HTTP/3")
+        print("Authenticated HTTP/3 (QUIC) mTLS forwarding to the loopback backend passed.")
     elif command == "denied":
         denied_http("http://127.0.0.1:18080/__spiffe_probe")
         denied_http("http://127.0.0.1:18080/__spiffe_probe", {"x-spiffe-id": "spiffe://service-auth.test/service-a", "x-forwarded-client-cert": "URI=spiffe://service-auth.test/service-a"})
         denied_http("http://envoy-b:8443/__spiffe_probe")
+        denied_tcp("envoy-b", 8443)
         denied_tcp("envoy-b", 8080)
         denied_tcp(os.environ["VITESS_BACKEND_IP"], 15991)
         denied_tcp(os.environ["VITESS_BACKEND_IP"], 15993)

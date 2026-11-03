@@ -17,7 +17,8 @@ type HTTPContextConfig struct {
 }
 
 // ServeHTTPContext owns a TCP HTTP listener and joins serving and bounded shutdown.
-// This is the canonical A/B lifecycle; the legacy HTTP/3 Server methods remain unchanged.
+// This is the canonical A/B lifecycle. Applications serve plaintext on loopback;
+// mesh mTLS and HTTP/3 terminate in the workload's Envoy (docs/spiffe-envoy.md).
 func ServeHTTPContext(ctx context.Context, config HTTPContextConfig) error {
 	if config.Handler == nil {
 		return errors.New("HTTP server: handler is required")

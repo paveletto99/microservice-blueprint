@@ -38,9 +38,9 @@ do not replace a real JWT/IdP deployment smoke check.
 ## Connections and identities
 
 ```text
-service-a → localhost:18000 / Envoy A == SPIFFE mTLS ==> Envoy B → localhost:8080 / service-b
+service-a → localhost:18000 / Envoy A == SPIFFE mTLS, HTTP/3 over QUIC (UDP 8443) ==> Envoy B → localhost:8080 / service-b
                                                             |
-                                     localhost:15051 / Envoy B == SPIFFE mTLS ==> Envoy Payment → payment gRPC
+                                     localhost:15051 / Envoy B == SPIFFE mTLS, TCP (gRPC/HTTP/2) ==> Envoy Payment → payment gRPC
                                                                                        |
                                                                 localhost:15991 / Envoy Payment
                                                                                        |
@@ -73,8 +73,46 @@ are explicitly TLS 1.3, avoiding Envoy's upstream TLS 1.2 default maximum.
 Secrets never appear in Envoy config: certificates, private keys and bundles
 arrive over SDS and update new connections without application restarts.
 
+### Transport protocols per hop
+
+| Hop | Wire protocol | Why |
+| --- | --- | --- |
+| Envoy A → Envoy B (business HTTP) | HTTP/3 over QUIC, UDP 8443 | Mesh HTTP hop; Envoy terminates QUIC with mTLS |
+| Collector → A/B/payment metrics | HTTP/3 over QUIC, UDP 8448 | Mesh HTTP hop; see [observability](observability.md) |
+| Envoy B → Envoy Payment | TLS 1.3 over TCP 8447, opaque gRPC/HTTP/2 | Envoy's HTTP/3 upstream codec breaks gRPC trailers-only errors (below) |
+| B/payment → Envoy Vitess | TLS 1.3 over TCP 8444–8446 | MySQL protocol is not HTTP; gRPC kept on TCP for the same reason |
+| Envoy → SPIRE agent SDS | HTTP/2 over a Unix socket | SDS is a local gRPC API |
+| App ↔ own Envoy (loopback) | Plaintext HTTP/1.1 or h2c gRPC | HTTP/3 requires TLS; no Go application handles certificates |
+
+The HTTP/3 hops are **HTTP/3 only, with no TCP fallback**: no TCP listener exists
+on 8443 or 8448, and smoke tests assert that TCP connections there are refused and
+that A's cluster counted an HTTP/3 upstream connection. Mesh peers must allow UDP
+between each other. QUIC downstream client-certificate authentication needs
+**Envoy ≥ 1.40.0** (pinned 1.40.2 is sufficient); older Envoy rejects
+`require_client_certificate` on QUIC listeners and silently omits upstream client
+certificates over HTTP/3. TLS session resumption and 0-RTT early data are disabled
+on QUIC listeners, so each new connection performs a full mTLS handshake.
+
+Envoy's QUIC client verifies the server certificate against SNI as a hostname
+before SAN matching, and SPIFFE URI SANs are not hostnames. Each HTTP/3 upstream
+cluster therefore sends its target host as SNI (`envoy-a`, `envoy-b`,
+`envoy-payment`), and SPIRE registrations for those workloads carry a matching DNS
+SAN. **Authorization still relies on the exact URI SAN**; the DNS SAN only satisfies
+the QUIC hostname check. Bootstrap adds missing DNS names to existing entries in
+place, so an upgraded stack needs no volume reset, only re-run bootstrap and
+recreate the proxies (`up --force-recreate`).
+
+The payment gRPC hop stays on TCP because Envoy 1.40 (and main at the time of
+writing) never reports end-of-stream on HTTP/3 response HEADERS in its upstream
+codec: a gRPC trailers-only error response (for example `AlreadyExists`) is
+re-encoded downstream as HEADERS plus an empty DATA frame, which gRPC clients
+reject with `server closed the stream without sending trailers`. Envoy's
+downstream QUIC stream already handles this case; revisit the hop when its
+upstream client stream does too. grpc-go has no HTTP/3 transport, so application
+gRPC remains HTTP/2 regardless.
+
 The optional [observability profile](observability.md) adds metrics-only mTLS
-listeners on 8448 and a private Prometheus collector. These listeners do not route
+HTTP/3 listeners on UDP 8448 and a private Prometheus collector. These listeners do not route
 business traffic; the existing business and database identity policies are unchanged.
 
 SPIFFE proves workload identity and encrypts transport. JWTs still prove the
@@ -91,7 +129,7 @@ Service A's resource origin is explicitly `http://127.0.0.1:18000`; this plainte
 hop remains inside its workload namespace. The cross-workload hop is mTLS.
 
 Only A's demo ingress is published, on **127.0.0.1:18081** (override SPIFFE_HTTP_PORT
-if needed). B's 8443 listener and database gateway's 8444/8445 listeners remain on
+if needed). B's UDP 8443 listener and database gateway's 8444/8445 listeners remain on
 the mesh network. Envoy admin is loopback-only on 9901; SPIRE control/API sockets
 are not exposed to the host or applications. Forged x-spiffe-id and
 x-forwarded-client-cert headers are sanitized, never used for authentication.

@@ -9,6 +9,13 @@ SPIRE = "/opt/spire/bin/spire-server"
 SOCKET = "/run/spire/server/api.sock"
 PARENT = "spiffe://service-auth.test/agent/compose"
 OUTPUT = Path("/run/spire/bootstrap")
+# Workload role -> attested UID.
+WORKLOAD_UIDS = {"service-a": "10001", "service-b": "10002", "vtgate": "10003", "unauthorized": "10004", "payment": "10005", "metrics-collector": "10006"}
+# Roles that terminate HTTP/3 also need a DNS SAN equal to the name their peers dial (and send as SNI): Envoy's
+# QUIC client verifier rejects a server certificate without it, even when the SPIFFE ID URI SAN matches. The
+# URI SAN stays the only authorization decision. Keep in sync with the "h3" clusters in
+# scripts/generate-spiffe-envoy.py (enforced by test/spiffe/test_envoy_config.py).
+DNS_NAMES = {"service-a": ("envoy-a",), "service-b": ("envoy-b",), "payment": ("envoy-payment",)}
 
 
 def cli(*args, json_output=True):
@@ -42,8 +49,10 @@ def prepare():
         atomic_file("bundle.pem", bundle)
     if not (OUTPUT / "bundle.pem").exists():
         raise RuntimeError("Incomplete bootstrap state; recreate only this demo's volumes")
-    for role, uid in (("service-a", "10001"), ("service-b", "10002"), ("vtgate", "10003"), ("unauthorized", "10004"), ("payment", "10005"), ("metrics-collector", "10006")):
+    for role, uid in WORKLOAD_UIDS.items():
         identity = "spiffe://service-auth.test/" + role
+        dns_names = DNS_NAMES.get(role, ())
+        selectors = ("unix:uid:" + uid, "docker:label:io.service-auth.workload:" + role, "docker:label:io.service-auth.deployment:spiffe-compose")
         existing = cli("entry", "show", "-spiffeID", identity)
         entries = existing.get("entries", [])
         if entries:
@@ -54,11 +63,17 @@ def prepare():
             actual = {(selector["type"], selector["value"]) for selector in entry.get("selectors", [])}
             if actual != expected or entry.get("parent_id") != {"trust_domain": "service-auth.test", "path": "/agent/compose"} or entry.get("admin") or entry.get("downstream") or entry.get("x509_svid_ttl") != 60:
                 raise RuntimeError("Existing workload registration does not match the least-privilege configuration")
+            if sorted(entry.get("dns_names", [])) != sorted(dns_names):
+                # Everything security-relevant matched above, so converge only the hostname binding. This lets a
+                # stack created before HTTP/3 upgrade in place without deleting its SPIRE/Vitess volumes.
+                cli("entry", "update", "-entryID", entry["id"], "-parentID", PARENT, "-spiffeID", identity,
+                    *[argument for selector in selectors for argument in ("-selector", selector)],
+                    *[argument for name in dns_names for argument in ("-dns", name)],
+                    "-x509SVIDTTL", "60")
             continue
         cli("entry", "create", "-parentID", PARENT, "-spiffeID", identity,
-            "-selector", "unix:uid:" + uid,
-            "-selector", "docker:label:io.service-auth.workload:" + role,
-            "-selector", "docker:label:io.service-auth.deployment:spiffe-compose",
+            *[argument for selector in selectors for argument in ("-selector", selector)],
+            *[argument for name in dns_names for argument in ("-dns", name)],
             "-x509SVIDTTL", "60")
     print("SPIRE bootstrap and workload registration prepared (no credentials printed).")
 

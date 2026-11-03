@@ -22,7 +22,7 @@ and a `Dockerfile.<name>`; `make build` picks up every `cmd/*` automatically.
 ```
 
 The separate `compose.spiffe.yaml` stack provides SPIRE-issued rotating identities,
-Envoy mTLS for A → B and B → Vitess, and a private local-development Vitess database.
+Envoy mTLS for A → B (HTTP/3 over QUIC) and B → Vitess, and a private local-development Vitess database.
 The default infrastructure/probe mode needs no OAuth credentials. Enable the `apps`
 profile with your external IdP configuration to run the unchanged JWT-protected Go
 applications. See [the SPIFFE/Envoy guide](docs/spiffe-envoy.md) for deployment,

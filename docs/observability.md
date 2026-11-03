@@ -13,8 +13,8 @@ docker compose -f compose.spiffe.yaml --profile observability exec -T prometheus
 The optional `observability` profile runs pinned Prometheus LTS 3.13.5 and a
 dedicated Envoy with `spiffe://service-auth.test/metrics-collector` (UID 10006).
 Prometheus scrapes A, B and payment through loopback listeners 18010–18012 in its
-own namespace. Each mesh hop uses TLS 1.3 and validates the exact server identity.
-The application's metrics-only listener on 8448 accepts only the collector's
+own namespace. Each mesh hop uses HTTP/3 over QUIC (TLS 1.3, UDP 8448) and
+validates the exact server identity. The application's metrics-only listener on UDP 8448 accepts only the collector's
 identity and forwards only `GET /metrics`. It cannot forward business routes.
 
 Application listeners remain private; neither the collector API nor UI has a
@@ -110,7 +110,7 @@ early close, unavailable exporters, queue saturation and repeated canceled flush
 `ServeMetricsIfPrometheus` and `NewPrometheusMetricsFactory` now return
 `ErrLegacyMetricsRetired`. They no longer open a hard-coded/global listener or call
 `os.Exit`. Old compatibility metric/factory types remain source-compatible but
-inert; migrate to `RequestTelemetry` and feature-owned collectors. The legacy
-HTTP/3 server no longer implicitly opens port 2223. The old experimental
+inert; migrate to `RequestTelemetry` and feature-owned collectors. The removed
+quic-go server no longer opens port 2223; HTTP/3 now terminates in Envoy. The old experimental
 `internal/metrics.New` is deprecated and remains only for existing explicit-registry
 callers. No new flow uses it.

@@ -78,65 +78,65 @@
         },
         "name": "service-b-mtls",
         "transport_socket": {
-          "name": "envoy.transport_sockets.tls",
+          "name": "envoy.transport_sockets.quic",
           "typed_config": {
-            "@type": "type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext",
-            "common_tls_context": {
-              "alpn_protocols": [
-                "h2"
-              ],
-              "combined_validation_context": {
-                "default_validation_context": {
-                  "match_typed_subject_alt_names": [
-                    {
-                      "matcher": {
-                        "exact": "spiffe://service-auth.test/service-b"
-                      },
-                      "san_type": "URI"
-                    }
-                  ]
-                },
-                "validation_context_sds_secret_config": {
-                  "name": "spiffe://service-auth.test",
-                  "sds_config": {
-                    "api_config_source": {
-                      "api_type": "GRPC",
-                      "grpc_services": [
-                        {
-                          "envoy_grpc": {
-                            "cluster_name": "spire_agent"
+            "@type": "type.googleapis.com/envoy.extensions.transport_sockets.quic.v3.QuicUpstreamTransport",
+            "upstream_tls_context": {
+              "common_tls_context": {
+                "combined_validation_context": {
+                  "default_validation_context": {
+                    "match_typed_subject_alt_names": [
+                      {
+                        "matcher": {
+                          "exact": "spiffe://service-auth.test/service-b"
+                        },
+                        "san_type": "URI"
+                      }
+                    ]
+                  },
+                  "validation_context_sds_secret_config": {
+                    "name": "spiffe://service-auth.test",
+                    "sds_config": {
+                      "api_config_source": {
+                        "api_type": "GRPC",
+                        "grpc_services": [
+                          {
+                            "envoy_grpc": {
+                              "cluster_name": "spire_agent"
+                            }
                           }
-                        }
-                      ],
-                      "transport_api_version": "V3"
-                    },
-                    "resource_api_version": "V3"
+                        ],
+                        "transport_api_version": "V3"
+                      },
+                      "resource_api_version": "V3"
+                    }
                   }
+                },
+                "tls_certificate_sds_secret_configs": [
+                  {
+                    "name": "spiffe://service-auth.test/service-a",
+                    "sds_config": {
+                      "api_config_source": {
+                        "api_type": "GRPC",
+                        "grpc_services": [
+                          {
+                            "envoy_grpc": {
+                              "cluster_name": "spire_agent"
+                            }
+                          }
+                        ],
+                        "transport_api_version": "V3"
+                      },
+                      "resource_api_version": "V3"
+                    }
+                  }
+                ],
+                "tls_params": {
+                  "tls_maximum_protocol_version": "TLSv1_3",
+                  "tls_minimum_protocol_version": "TLSv1_3"
                 }
               },
-              "tls_certificate_sds_secret_configs": [
-                {
-                  "name": "spiffe://service-auth.test/service-a",
-                  "sds_config": {
-                    "api_config_source": {
-                      "api_type": "GRPC",
-                      "grpc_services": [
-                        {
-                          "envoy_grpc": {
-                            "cluster_name": "spire_agent"
-                          }
-                        }
-                      ],
-                      "transport_api_version": "V3"
-                    },
-                    "resource_api_version": "V3"
-                  }
-                }
-              ],
-              "tls_params": {
-                "tls_maximum_protocol_version": "TLSv1_3",
-                "tls_minimum_protocol_version": "TLSv1_3"
-              }
+              "sni": "envoy-b"
             }
           }
         },
@@ -148,7 +148,7 @@
               "max_connection_duration": "30s"
             },
             "explicit_http_config": {
-              "http2_protocol_options": {}
+              "http3_protocol_options": {}
             }
           }
         }
@@ -354,7 +354,8 @@
         "address": {
           "socket_address": {
             "address": "0.0.0.0",
-            "port_value": 8448
+            "port_value": 8448,
+            "protocol": "UDP"
           }
         },
         "filter_chains": [
@@ -364,12 +365,13 @@
                 "name": "envoy.filters.network.http_connection_manager",
                 "typed_config": {
                   "@type": "type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager",
-                  "codec_type": "AUTO",
+                  "codec_type": "HTTP3",
                   "common_http_protocol_options": {
                     "idle_timeout": "30s",
                     "max_connection_duration": "30s"
                   },
                   "forward_client_cert_details": "SANITIZE",
+                  "http3_protocol_options": {},
                   "http_filters": [
                     {
                       "name": "envoy.filters.http.router",
@@ -420,72 +422,76 @@
               }
             ],
             "transport_socket": {
-              "name": "envoy.transport_sockets.tls",
+              "name": "envoy.transport_sockets.quic",
               "typed_config": {
-                "@type": "type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext",
-                "common_tls_context": {
-                  "alpn_protocols": [
-                    "h2"
-                  ],
-                  "combined_validation_context": {
-                    "default_validation_context": {
-                      "match_typed_subject_alt_names": [
-                        {
-                          "matcher": {
-                            "exact": "spiffe://service-auth.test/metrics-collector"
-                          },
-                          "san_type": "URI"
-                        }
-                      ]
-                    },
-                    "validation_context_sds_secret_config": {
-                      "name": "spiffe://service-auth.test",
-                      "sds_config": {
-                        "api_config_source": {
-                          "api_type": "GRPC",
-                          "grpc_services": [
-                            {
-                              "envoy_grpc": {
-                                "cluster_name": "spire_agent"
+                "@type": "type.googleapis.com/envoy.extensions.transport_sockets.quic.v3.QuicDownstreamTransport",
+                "downstream_tls_context": {
+                  "common_tls_context": {
+                    "combined_validation_context": {
+                      "default_validation_context": {
+                        "match_typed_subject_alt_names": [
+                          {
+                            "matcher": {
+                              "exact": "spiffe://service-auth.test/metrics-collector"
+                            },
+                            "san_type": "URI"
+                          }
+                        ]
+                      },
+                      "validation_context_sds_secret_config": {
+                        "name": "spiffe://service-auth.test",
+                        "sds_config": {
+                          "api_config_source": {
+                            "api_type": "GRPC",
+                            "grpc_services": [
+                              {
+                                "envoy_grpc": {
+                                  "cluster_name": "spire_agent"
+                                }
                               }
-                            }
-                          ],
-                          "transport_api_version": "V3"
-                        },
-                        "resource_api_version": "V3"
+                            ],
+                            "transport_api_version": "V3"
+                          },
+                          "resource_api_version": "V3"
+                        }
                       }
+                    },
+                    "tls_certificate_sds_secret_configs": [
+                      {
+                        "name": "spiffe://service-auth.test/service-a",
+                        "sds_config": {
+                          "api_config_source": {
+                            "api_type": "GRPC",
+                            "grpc_services": [
+                              {
+                                "envoy_grpc": {
+                                  "cluster_name": "spire_agent"
+                                }
+                              }
+                            ],
+                            "transport_api_version": "V3"
+                          },
+                          "resource_api_version": "V3"
+                        }
+                      }
+                    ],
+                    "tls_params": {
+                      "tls_maximum_protocol_version": "TLSv1_3",
+                      "tls_minimum_protocol_version": "TLSv1_3"
                     }
                   },
-                  "tls_certificate_sds_secret_configs": [
-                    {
-                      "name": "spiffe://service-auth.test/service-a",
-                      "sds_config": {
-                        "api_config_source": {
-                          "api_type": "GRPC",
-                          "grpc_services": [
-                            {
-                              "envoy_grpc": {
-                                "cluster_name": "spire_agent"
-                              }
-                            }
-                          ],
-                          "transport_api_version": "V3"
-                        },
-                        "resource_api_version": "V3"
-                      }
-                    }
-                  ],
-                  "tls_params": {
-                    "tls_maximum_protocol_version": "TLSv1_3",
-                    "tls_minimum_protocol_version": "TLSv1_3"
-                  }
+                  "require_client_certificate": true
                 },
-                "require_client_certificate": true
+                "enable_early_data": false,
+                "enable_resumption": false
               }
             }
           }
         ],
-        "name": "inbound-metrics"
+        "name": "inbound-metrics",
+        "udp_listener_config": {
+          "quic_options": {}
+        }
       }
     ]
   }
